@@ -2,7 +2,9 @@ package utp
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"math/rand"
 	"net"
@@ -23,12 +25,63 @@ type syn struct {
 	addr            net.Addr
 }
 
+type extensionField struct {
+	Type  byte
+	Bytes []byte
+}
+
 type header struct {
-	Type    int
-	Version int
-	ConnID  uint16
-	SeqNr   uint16
-	AckNr   uint16
+	Type          int
+	Version       int
+	ConnID        uint16
+	Timestamp     uint32
+	TimestampDiff uint32
+	WndSize       uint32
+	SeqNr         uint16
+	AckNr         uint16
+	Extensions    []extensionField
+}
+
+func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField) {
+	for _type != 0 {
+		ef = append(ef, extensionField{
+			Type:  _type,
+			Bytes: append([]byte{}, b[2:b[1]+2]...),
+		})
+		_type = b[0]
+		n += 2 + int(b[1])
+	}
+	return
+}
+
+func (h *header) Unmarshal(b []byte) (n int, err error) {
+	// TODO: Are these endian-safe?
+	h.Type = int(b[0] >> 4)
+	h.Version = int(b[0] & 0xf)
+	n, h.Extensions = unmarshalExtensions(b[1], b[20:])
+	h.ConnID = binary.BigEndian.Uint16(b[2:4])
+	h.Timestamp = binary.BigEndian.Uint32(b[4:8])
+	h.TimestampDiff = binary.BigEndian.Uint32(b[8:12])
+	h.WndSize = binary.BigEndian.Uint32(b[12:16])
+	h.SeqNr = binary.BigEndian.Uint16(b[16:18])
+	h.AckNr = binary.BigEndian.Uint16(b[18:20])
+	n += 20
+	return
+}
+
+func (h *header) Marshal() (p []byte) {
+	if len(h.Extensions) != 0 {
+		panic("marshalling of extensions not implemented")
+	}
+	p = make([]byte, 20)
+	p[0] = byte(h.Type<<4 | 1)
+	binary.BigEndian.PutUint16(p[2:4], h.ConnID)
+	binary.BigEndian.PutUint32(p[4:8], h.Timestamp)
+	binary.BigEndian.PutUint32(p[8:12], h.TimestampDiff)
+	binary.BigEndian.PutUint32(p[12:16], h.WndSize)
+	binary.BigEndian.PutUint16(p[16:18], h.SeqNr)
+	binary.BigEndian.PutUint16(p[18:20], h.AckNr)
+	return
 }
 
 var (
@@ -37,9 +90,20 @@ var (
 )
 
 const (
-	CS_INVALID = iota
-	CS_SYN_SENT
-	CS_CONNECTED
+	csInvalid = iota
+	csSynSent
+	csConnected
+	csGotFin
+	csSentFin
+	csDestroy
+)
+
+const (
+	ST_DATA = iota
+	ST_FIN
+	ST_STATE
+	ST_RESET
+	ST_SYN
 )
 
 type Conn struct {
@@ -63,7 +127,7 @@ var (
 )
 
 func (c *Conn) connected() bool {
-	return c.cs == CS_CONNECTED
+	return c.cs == csConnected
 }
 
 func NewSocket(addr string) (s *Socket, err error) {
@@ -77,36 +141,39 @@ func NewSocket(addr string) (s *Socket, err error) {
 	return
 }
 
+func packetDebugString(h *header, payload []byte) string {
+	return fmt.Sprintf("%#v: %q", h, payload)
+}
+
 func (s *Socket) recvLoop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for {
-		b := make([]byte, 1000)
+		s.mu.Unlock()
+		b := make([]byte, 2000)
 		n, addr, err := s.pc.ReadFrom(b)
+		s.mu.Lock()
 		if err != nil {
 			panic(err)
 		}
-		log.Printf("received from %s: %q", addr, b[:n])
 		if n < 20 {
 			continue
 		}
 		var h header
-		h.ConnID = binary.BigEndian.Uint16(b[2:4])
-		h.SeqNr = binary.BigEndian.Uint16(b[16:18])
-		h.AckNr = binary.BigEndian.Uint16(b[18:20])
-		h.Type = int(b[0] >> 4)
+		hEnd, _ := h.Unmarshal(b[:n])
+		log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:n]))
 		if c, ok := s.conns[h.ConnID]; ok {
-			c.deliver(h, b[20:n])
+			c.deliver(h, b[hEnd:n])
 			continue
 		}
 		if h.Type == ST_SYN {
 			log.Printf("adding SYN to backlog")
-			s.mu.Lock()
 			s.backlog = append(s.backlog, syn{
 				seq_nr:  h.SeqNr,
 				conn_id: h.ConnID,
 				addr:    addr,
 			})
 			s.event.Broadcast()
-			s.mu.Unlock()
 			continue
 		}
 		log.Printf("unhandled message from %s: %q", addr, b[:n])
@@ -114,12 +181,17 @@ func (s *Socket) recvLoop() {
 }
 
 func Dial(addr string) (c *Conn, err error) {
+	return DialTimeout(addr, 0)
+}
+
+func DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
 	s, err := NewSocket(":0")
 	if err != nil {
 		return
 	}
-	c, err = s.Dial(addr)
+	c, err = s.DialTimeout(addr, timeout)
 	return
+
 }
 
 func (s *Socket) newConnID() (id uint16) {
@@ -140,7 +212,11 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	return
 }
 
-func (s *Socket) Dial(addr string) (c *Conn, err error) {
+func (s *Socket) Dial(addr string) (*Conn, error) {
+	return s.DialTimeout(addr, 0)
+}
+
+func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
 	netAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return
@@ -149,44 +225,103 @@ func (s *Socket) Dial(addr string) (c *Conn, err error) {
 	c.recv_id = s.newConnID()
 	c.send_id = c.recv_id + 1
 	s.registerConn(c.recv_id, c)
-	go c.connect()
+	connErr := make(chan error, 1)
+	go func() {
+		connErr <- c.connect()
+	}()
+	var timeoutCh <-chan time.Time
+	if timeout != 0 {
+		timeoutCh = time.After(timeout)
+	}
+	select {
+	case err = <-connErr:
+	case <-timeoutCh:
+		c.Close()
+		err = errors.New("dial timeout")
+	}
 	return
 }
 
-func (c *Conn) send(_type int, connID uint16, payload []byte) (n int, err error) {
-	p := make([]byte, 20+len(payload))
-	p[0] = byte(_type<<4 | 1)
-	binary.BigEndian.PutUint16(p[2:4], connID)
-	binary.BigEndian.PutUint32(p[4:8], uint32(time.Now().UnixNano()/1000))
-	binary.BigEndian.PutUint16(p[16:18], c.seq_nr)
-	binary.BigEndian.PutUint16(p[18:20], c.ack_nr)
-	copy(p[20:], payload)
-	log.Printf("writing to %s: %q", c.remoteAddr, p)
+func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
+	h := header{
+		Type:      _type,
+		Version:   1,
+		ConnID:    connID,
+		SeqNr:     seqNr,
+		AckNr:     c.ack_nr,
+		WndSize:   15610,
+		Timestamp: uint32(time.Now().UnixNano() / 1000),
+	}
+	p := h.Marshal()
+	if len(payload) > 576-len(p) {
+		payload = payload[:576-len(p)]
+	}
+	p = append(p, payload...)
+	log.Printf("writing utp msg: %s", packetDebugString(&h, payload))
 	n1, err := c.socket.WriteTo(p, c.remoteAddr)
 	if err != nil {
 		return
 	}
-	n = n1 - 20
-	c.seq_nr++
+	if n1 != len(p) {
+		panic(n1)
+	}
+	n = len(payload)
 	return
+}
+
+func (c *Conn) sendState() {
+	c.send(ST_STATE, c.send_id, nil, c.seq_nr)
+}
+
+func seqLess(a, b uint16) bool {
+	return a < b
 }
 
 func (c *Conn) deliver(h header, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	log.Printf("delivering message to %s", c)
+	defer c.event.Broadcast()
 	if h.ConnID != c.recv_id {
 		panic("wrong conn id")
 	}
-	c.ack_nr = h.SeqNr
-	c.send(ST_STATE, c.send_id, nil)
-	c.lastAck = h.AckNr
+	if seqLess(c.lastAck, h.AckNr) {
+		c.lastAck = h.AckNr
+	}
+	if h.Type == ST_STATE {
+		if c.cs == csSynSent {
+			c.ack_nr = h.SeqNr - 1
+			c.cs = csConnected
+		}
+		return
+	}
+	switch c.cs {
+	case csConnected:
+		if h.Type != ST_STATE && h.SeqNr != c.ack_nr+1 {
+			log.Printf("out of order packet: expected %x got %x", c.ack_nr+1, h.SeqNr)
+			return
+		}
+		c.ack_nr = h.SeqNr
+	case csSentFin:
+		if h.AckNr == c.seq_nr-1 {
+			c.cs = csDestroy
+		}
+	}
+	if h.Type != ST_STATE {
+		c.sendState()
+	}
+	if h.Type == ST_FIN {
+		// Skip csGotFin because we can't be missing any packets with the
+		// current design.
+		log.Print("set destroy")
+		c.cs = csDestroy
+	}
+	log.Printf("appending to readbuf")
 	c.readBuf = append(c.readBuf, payload...)
-	c.event.Broadcast()
+	// c.event.Broadcast()
 }
 
 func (c *Conn) waitAck(seq uint16) {
-	for c.lastAck < seq {
+	for seqLess(c.lastAck, seq) {
 		c.event.Wait()
 	}
 }
@@ -195,14 +330,14 @@ func (c *Conn) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq_nr = 1
-	_, err := c.send(ST_SYN, c.recv_id, nil)
+	_, err := c.send(ST_SYN, c.recv_id, nil, c.seq_nr)
 	if err != nil {
-		panic(err)
+		return err
 	}
+	c.cs = csSynSent
 	log.Printf("sent syn")
+	c.seq_nr++
 	c.waitAck(1)
-	log.Printf("syn acked")
-	c.cs = CS_CONNECTED
 	c.event.Broadcast()
 	return err
 }
@@ -234,8 +369,9 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 	_c.recv_id = _c.send_id + 1
 	_c.seq_nr = uint16(rand.Int())
 	_c.ack_nr = syn.seq_nr
-	_c.send(ST_STATE, _c.send_id, nil)
-	_c.cs = CS_CONNECTED
+	_c.sendState()
+	// _c.seq_nr++
+	_c.cs = csConnected
 	s.registerConn(_c.recv_id, _c)
 	c = _c
 	return
@@ -275,6 +411,14 @@ func (s *Socket) WriteTo([]byte, net.Addr) (int, error) {
 }
 
 func (c *Conn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cs == csSentFin {
+		return nil
+	}
+	c.send(ST_FIN, c.send_id, nil, c.seq_nr)
+	c.seq_nr++ // Spec says set to "eof_pkt".
+	c.cs = csSentFin
 	return nil
 }
 
@@ -285,12 +429,21 @@ func (c *Conn) LocalAddr() net.Addr {
 func (c *Conn) Read(b []byte) (n int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for len(c.readBuf) == 0 {
+	for {
+		if len(c.readBuf) != 0 {
+			break
+		}
+		if c.cs == csDestroy {
+			err = io.EOF
+			return
+		}
+		log.Printf("nothing to read, state=%d", c.cs)
 		c.event.Wait()
 	}
-	log.Printf("read some data!")
+	// log.Printf("read some data!")
 	n = copy(b, c.readBuf)
 	c.readBuf = c.readBuf[n:]
+
 	return
 }
 
@@ -310,14 +463,6 @@ func (s *Conn) SetWriteDeadline(time.Time) error {
 	return nil
 }
 
-const (
-	ST_DATA = iota
-	ST_FIN
-	ST_STATE
-	ST_RESET
-	ST_SYN
-)
-
 func (c *Conn) String() string {
 	return fmt.Sprintf("<UTPConn %s-%s>", c.LocalAddr(), c.RemoteAddr())
 }
@@ -325,15 +470,22 @@ func (c *Conn) String() string {
 func (c *Conn) Write(p []byte) (n int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for !c.connected() {
-		c.event.Wait()
-	}
 	for len(p) != 0 {
+		if c.cs != csConnected {
+			err = io.ErrClosedPipe
+			return
+		}
+		p1 := p
+		// if len(p1) > 1024 {
+		// 	p1 = p1[:1024]
+		// }
 		var n1 int
-		n1, err = c.send(ST_DATA, c.send_id, p)
+		n1, err = c.send(ST_DATA, c.send_id, p1, c.seq_nr)
 		if err != nil {
 			return
 		}
+		c.seq_nr++
+		c.waitAck(c.seq_nr - 1)
 		n += n1
 		p = p[n1:]
 	}
