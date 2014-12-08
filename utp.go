@@ -42,6 +42,8 @@ type header struct {
 	Extensions    []extensionField
 }
 
+const logLevel = 0
+
 func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField) {
 	for _type != 0 {
 		ef = append(ef, extensionField{
@@ -161,13 +163,17 @@ func (s *Socket) recvLoop() {
 		}
 		var h header
 		hEnd, _ := h.Unmarshal(b[:n])
-		log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:n]))
+		if logLevel >= 1 {
+			log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:n]))
+		}
 		if c, ok := s.conns[h.ConnID]; ok {
 			c.deliver(h, b[hEnd:n])
 			continue
 		}
 		if h.Type == ST_SYN {
-			log.Printf("adding SYN to backlog")
+			if logLevel >= 1 {
+				log.Printf("adding SYN to backlog")
+			}
 			s.backlog = append(s.backlog, syn{
 				seq_nr:  h.SeqNr,
 				conn_id: h.ConnID,
@@ -176,7 +182,9 @@ func (s *Socket) recvLoop() {
 			s.event.Broadcast()
 			continue
 		}
-		log.Printf("unhandled message from %s: %q", addr, b[:n])
+		if logLevel >= 1 {
+			log.Printf("unhandled message from %s: %q", addr, b[:n])
+		}
 	}
 }
 
@@ -257,7 +265,9 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 		payload = payload[:576-len(p)]
 	}
 	p = append(p, payload...)
-	log.Printf("writing utp msg: %s", packetDebugString(&h, payload))
+	if logLevel >= 1 {
+		log.Printf("writing utp msg: %s", packetDebugString(&h, payload))
+	}
 	n1, err := c.socket.WriteTo(p, c.remoteAddr)
 	if err != nil {
 		return
@@ -267,14 +277,37 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 	}
 	n = len(payload)
 	if _type != ST_STATE {
-		time.AfterFunc(1*time.Second, c.resendFunc(c.seq_nr, p))
-		time.AfterFunc(2*time.Second, c.resendFunc(c.seq_nr, p))
-		time.AfterFunc(3*time.Second, c.timeoutFunc(c.seq_nr))
+		go func() {
+			acked := make(chan struct{})
+			go func() {
+				defer close(acked)
+				c.mu.Lock()
+				defer c.mu.Unlock()
+				c.waitAck(seqNr)
+			}()
+			for retry := 0; retry < 5; retry++ {
+				select {
+				case <-acked:
+					return
+				case <-time.After(500*time.Millisecond + time.Duration(rand.Int63n(int64(time.Second)))):
+				}
+				log.Print("resend")
+				c.socket.WriteTo(p, c.remoteAddr)
+			}
+			select {
+			case <-acked:
+				return
+			case <-time.After(time.Second):
+			}
+			c.mu.Lock()
+			c.destroy()
+			c.mu.Unlock()
+		}()
 	}
 	return
 }
 
-func (c *Conn) resendFunc(seqNr uint16, packet []byte) func() {
+func (c *Conn) resendFunc(seqNr uint16, packet []byte, retry int) func() {
 	return func() {
 		c.mu.Lock()
 		defer c.mu.Unlock()
@@ -284,6 +317,12 @@ func (c *Conn) resendFunc(seqNr uint16, packet []byte) func() {
 		n, err := c.socket.WriteTo(packet, c.remoteAddr)
 		if err != nil || n != len(packet) {
 			c.destroy()
+			return
+		}
+		if retry == 5 {
+			time.AfterFunc(time.Second, c.timeoutFunc(seqNr))
+		} else {
+			time.AfterFunc(1*time.Second, c.resendFunc(seqNr, packet, retry+1))
 		}
 	}
 }
@@ -318,27 +357,32 @@ func (c *Conn) deliver(h header, payload []byte) {
 	if seqLess(c.lastAck, h.AckNr) {
 		c.lastAck = h.AckNr
 	}
-	if h.Type == ST_STATE {
-		if c.cs == csSynSent {
-			c.ack_nr = h.SeqNr - 1
-			c.cs = csConnected
-		}
-		return
-	}
-	switch c.cs {
-	case csConnected:
-		if h.Type != ST_STATE && h.SeqNr != c.ack_nr+1 {
-			log.Printf("out of order packet: expected %x got %x", c.ack_nr+1, h.SeqNr)
+	if c.cs == csSynSent {
+		if h.Type != ST_STATE {
 			return
 		}
+		c.cs = csConnected
+		c.ack_nr = h.SeqNr - 1
+		return
+	}
+	if h.Type == ST_STATE {
+		return
+	}
+	outOfOrder := false
+	if h.SeqNr == c.ack_nr+1 {
 		c.ack_nr = h.SeqNr
-	case csSentFin:
-		if h.AckNr == c.seq_nr-1 {
+	} else {
+		outOfOrder = true
+	}
+	c.sendState()
+	if outOfOrder {
+		log.Printf("out of order packet: expected %x got %x", c.ack_nr+1, h.SeqNr)
+		return
+	}
+	if c.cs == csSentFin {
+		if !seqLess(h.AckNr, c.seq_nr-1) {
 			c.cs = csDestroy
 		}
-	}
-	if h.Type != ST_STATE {
-		c.sendState()
 	}
 	if h.Type == ST_FIN {
 		// Skip csGotFin because we can't be missing any packets with the
@@ -346,7 +390,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 		log.Print("set destroy")
 		c.cs = csDestroy
 	}
-	log.Printf("appending to readbuf")
+	if logLevel >= 2 {
+		log.Printf("appending to readbuf")
+	}
 	c.readBuf = append(c.readBuf, payload...)
 	// c.event.Broadcast()
 }
@@ -372,7 +418,9 @@ func (c *Conn) connect() error {
 		return err
 	}
 	c.cs = csSynSent
-	log.Printf("sent syn")
+	if logLevel >= 2 {
+		log.Printf("sent syn")
+	}
 	c.seq_nr++
 	c.waitAck(1)
 	c.event.Broadcast()
@@ -483,7 +531,9 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			err = io.EOF
 			return
 		}
-		log.Printf("nothing to read, state=%d", c.cs)
+		if logLevel >= 2 {
+			log.Printf("nothing to read, state=%d", c.cs)
+		}
 		c.event.Wait()
 	}
 	// log.Printf("read some data!")
