@@ -266,7 +266,38 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 		panic(n1)
 	}
 	n = len(payload)
+	if _type != ST_STATE {
+		time.AfterFunc(1*time.Second, c.resendFunc(c.seq_nr, p))
+		time.AfterFunc(2*time.Second, c.resendFunc(c.seq_nr, p))
+		time.AfterFunc(3*time.Second, c.timeoutFunc(c.seq_nr))
+	}
 	return
+}
+
+func (c *Conn) resendFunc(seqNr uint16, packet []byte) func() {
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !seqLess(c.lastAck, seqNr) {
+			return
+		}
+		n, err := c.socket.WriteTo(packet, c.remoteAddr)
+		if err != nil || n != len(packet) {
+			c.destroy()
+		}
+	}
+}
+
+func (c *Conn) timeoutFunc(seqNr uint16) func() {
+	return func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !seqLess(c.lastAck, seqNr) {
+			return
+		}
+		// log.Printf(, ...)
+		c.destroy()
+	}
 }
 
 func (c *Conn) sendState() {
@@ -321,7 +352,13 @@ func (c *Conn) deliver(h header, payload []byte) {
 }
 
 func (c *Conn) waitAck(seq uint16) {
-	for seqLess(c.lastAck, seq) {
+	for {
+		if c.cs == csDestroy {
+			return
+		}
+		if !seqLess(c.lastAck, seq) {
+			return
+		}
 		c.event.Wait()
 	}
 }
@@ -410,15 +447,24 @@ func (s *Socket) WriteTo([]byte, net.Addr) (int, error) {
 	return 0, nil
 }
 
-func (c *Conn) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *Conn) finish() {
 	if c.cs == csSentFin {
-		return nil
+		return
 	}
 	c.send(ST_FIN, c.send_id, nil, c.seq_nr)
 	c.seq_nr++ // Spec says set to "eof_pkt".
 	c.cs = csSentFin
+}
+
+func (c *Conn) destroy() {
+	c.cs = csDestroy
+	c.event.Broadcast()
+}
+
+func (c *Conn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.finish()
 	return nil
 }
 
@@ -475,12 +521,8 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			err = io.ErrClosedPipe
 			return
 		}
-		p1 := p
-		// if len(p1) > 1024 {
-		// 	p1 = p1[:1024]
-		// }
 		var n1 int
-		n1, err = c.send(ST_DATA, c.send_id, p1, c.seq_nr)
+		n1, err = c.send(ST_DATA, c.send_id, p, c.seq_nr)
 		if err != nil {
 			return
 		}
