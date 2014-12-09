@@ -42,7 +42,11 @@ type header struct {
 	Extensions    []extensionField
 }
 
-const logLevel = 0
+const (
+	logLevel   = 0
+	minMTU     = 576
+	recvWindow = 0x8000
+)
 
 func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField) {
 	for _type != 0 {
@@ -115,6 +119,7 @@ type Conn struct {
 	recv_id, send_id uint16
 	seq_nr, ack_nr   uint16
 	lastAck          uint16
+	lastTimeDiff     uint32
 
 	readBuf []byte
 
@@ -252,17 +257,24 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 
 func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
 	h := header{
-		Type:      _type,
-		Version:   1,
-		ConnID:    connID,
-		SeqNr:     seqNr,
-		AckNr:     c.ack_nr,
-		WndSize:   15610,
-		Timestamp: uint32(time.Now().UnixNano() / 1000),
+		Type:    _type,
+		Version: 1,
+		ConnID:  connID,
+		SeqNr:   seqNr,
+		AckNr:   c.ack_nr,
+		WndSize: func() uint32 {
+			rblu32 := uint32(len(c.readBuf))
+			if rblu32 >= recvWindow {
+				return 0
+			}
+			return recvWindow - rblu32
+		}(),
+		Timestamp:     uint32(time.Now().Nanosecond() / 1000),
+		TimestampDiff: c.lastTimeDiff,
 	}
 	p := h.Marshal()
-	if len(payload) > 576-len(p) {
-		payload = payload[:576-len(p)]
+	if len(payload) > minMTU-len(p) {
+		payload = payload[:minMTU-len(p)]
 	}
 	p = append(p, payload...)
 	if logLevel >= 1 {
@@ -356,6 +368,11 @@ func (c *Conn) deliver(h header, payload []byte) {
 	}
 	if seqLess(c.lastAck, h.AckNr) {
 		c.lastAck = h.AckNr
+	}
+	nowMicro := uint32(time.Now().Nanosecond() / 1000)
+	c.lastTimeDiff = nowMicro - h.Timestamp
+	if nowMicro < h.Timestamp {
+		c.lastTimeDiff += 1000000
 	}
 	if c.cs == csSynSent {
 		if h.Type != ST_STATE {
