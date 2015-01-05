@@ -13,11 +13,21 @@ import (
 )
 
 type Socket struct {
-	mu      sync.Mutex
-	event   sync.Cond
-	pc      net.PacketConn
-	conns   map[uint16]*Conn
-	backlog []syn
+	mu          sync.Mutex
+	event       sync.Cond
+	pc          net.PacketConn
+	conns       map[uint16]*Conn
+	backlog     chan syn
+	reads       chan read
+	unusedReads chan read
+	closing     chan struct{}
+
+	ReadErr error
+}
+
+type read struct {
+	data []byte
+	from net.Addr
 }
 
 type syn struct {
@@ -138,13 +148,19 @@ func (c *Conn) connected() bool {
 }
 
 func NewSocket(addr string) (s *Socket, err error) {
-	s = &Socket{}
+	s = &Socket{
+		backlog:     make(chan syn, 5),
+		reads:       make(chan read, 1),
+		unusedReads: make(chan read, 1),
+		closing:     make(chan struct{}),
+	}
 	s.event.L = &s.mu
 	s.pc, err = net.ListenPacket("udp", addr)
 	if err != nil {
 		return
 	}
-	go s.recvLoop()
+	go s.reader()
+	go s.dispatcher()
 	return
 }
 
@@ -152,44 +168,91 @@ func packetDebugString(h *header, payload []byte) string {
 	return fmt.Sprintf("%#v: %q", h, payload)
 }
 
-func (s *Socket) recvLoop() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+func (s *Socket) reader() {
+	defer close(s.reads)
 	for {
-		s.mu.Unlock()
+		if s.pc == nil {
+			break
+		}
 		b := make([]byte, 2000)
 		n, addr, err := s.pc.ReadFrom(b)
-		s.mu.Lock()
 		if err != nil {
-			panic(err)
+			select {
+			case <-s.closing:
+			default:
+				s.ReadErr = err
+			}
+			return
 		}
-		if n < 20 {
+		s.reads <- read{b[:n], addr}
+	}
+}
+
+func (s *Socket) unusedRead(read read) {
+	select {
+	case s.unusedReads <- read:
+	default:
+	}
+}
+
+func (s *Socket) pushBacklog(syn syn) {
+	for {
+		select {
+		case s.backlog <- syn:
+			return
+		default:
+			select {
+			case s.backlog <- syn:
+				return
+			case <-s.backlog:
+			default:
+				return
+			}
+		}
+	}
+}
+
+func (s *Socket) dispatcher() {
+	defer close(s.backlog)
+	for {
+		read, ok := <-s.reads
+		if !ok {
+			return
+		}
+		if len(read.data) < 20 {
+			s.unusedRead(read)
 			continue
 		}
+		b := read.data
+		addr := read.from
 		var h header
-		hEnd, _ := h.Unmarshal(b[:n])
+		hEnd, _ := h.Unmarshal(b)
 		if logLevel >= 1 {
-			log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:n]))
+			log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:]))
 		}
-		if c, ok := s.conns[h.ConnID]; ok {
-			c.deliver(h, b[hEnd:n])
+		s.mu.Lock()
+		c, ok := s.conns[h.ConnID]
+		s.mu.Unlock()
+		if ok {
+			c.deliver(h, b[hEnd:])
 			continue
 		}
 		if h.Type == ST_SYN {
 			if logLevel >= 1 {
 				log.Printf("adding SYN to backlog")
 			}
-			s.backlog = append(s.backlog, syn{
+			syn := syn{
 				seq_nr:  h.SeqNr,
 				conn_id: h.ConnID,
 				addr:    addr,
-			})
-			s.event.Broadcast()
+			}
+			s.pushBacklog(syn)
 			continue
 		}
 		if logLevel >= 1 {
-			log.Printf("unhandled message from %s: %q", addr, b[:n])
+			log.Printf("unhandled message from %s: %q", addr, b)
 		}
+		s.unusedRead(read)
 	}
 }
 
@@ -455,26 +518,18 @@ func (s *Socket) registerConn(recvID uint16, c *Conn) {
 }
 
 func (s *Socket) Accept() (c net.Conn, err error) {
+	syn := <-s.backlog
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for len(s.backlog) == 0 {
-		s.event.Wait()
-	}
-	syn := s.backlog[0]
-	s.backlog = s.backlog[1:]
-	if _, ok := s.conns[syn.conn_id+1]; ok {
-		// SYN for existing connection.
-		panic("packet wasn't delivered to conn")
-	}
 	_c := s.newConn(syn.addr)
 	_c.send_id = syn.conn_id
 	_c.recv_id = _c.send_id + 1
 	_c.seq_nr = uint16(rand.Int())
 	_c.ack_nr = syn.seq_nr
-	_c.sendState()
-	// _c.seq_nr++
 	_c.cs = csConnected
 	s.registerConn(_c.recv_id, _c)
+	_c.sendState()
+	// _c.seq_nr++
 	c = _c
 	return
 }
@@ -483,9 +538,15 @@ func (s *Socket) Addr() net.Addr {
 	return s.pc.LocalAddr()
 }
 
-func (s *Socket) Close() error {
-	s.pc = nil
-	return nil
+func (s *Socket) Close() (err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.closing:
+	default:
+		close(s.closing)
+	}
+	return
 }
 
 func (s *Socket) LocalAddr() net.Addr {
