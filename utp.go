@@ -418,38 +418,6 @@ func (c *Conn) cur_window() (window uint32) {
 	return
 }
 
-func (c *Conn) resendFunc(seqNr uint16, packet []byte, retry int) func() {
-	return func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if !seqLess(c.lastAck, seqNr) {
-			return
-		}
-		n, err := c.socket.WriteTo(packet, c.remoteAddr)
-		if err != nil || n != len(packet) {
-			c.destroy()
-			return
-		}
-		if retry == 5 {
-			time.AfterFunc(time.Second, c.timeoutFunc(seqNr))
-		} else {
-			time.AfterFunc(1*time.Second, c.resendFunc(seqNr, packet, retry+1))
-		}
-	}
-}
-
-func (c *Conn) timeoutFunc(seqNr uint16) func() {
-	return func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if !seqLess(c.lastAck, seqNr) {
-			return
-		}
-		// log.Printf(, ...)
-		c.destroy()
-	}
-}
-
 func (c *Conn) sendState() {
 	c.write(ST_STATE, c.send_id, nil, c.seq_nr)
 }
@@ -463,7 +431,6 @@ func seqLess(a, b uint16) bool {
 }
 
 func (c *Conn) ack(nr uint16) {
-	// log.Printf("nr: %d, lastack: %d", nr, c.lastAck)
 	if !seqLess(c.lastAck, nr) {
 		return
 	}
