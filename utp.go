@@ -130,6 +130,7 @@ type Conn struct {
 	seq_nr, ack_nr   uint16
 	lastAck          uint16
 	lastTimeDiff     uint32
+	peerWndSize      uint32
 
 	readBuf []byte
 
@@ -137,6 +138,13 @@ type Conn struct {
 	remoteAddr net.Addr
 
 	cs int
+
+	unackedSends []send
+}
+
+type send struct {
+	acked chan struct{}
+	size  uint32
 }
 
 var (
@@ -352,19 +360,14 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 	}
 	n = len(payload)
 	if _type != ST_STATE {
+		acked := make(chan struct{})
+		c.unackedSends = append(c.unackedSends, send{acked, uint32(len(p))})
 		go func() {
-			acked := make(chan struct{})
-			go func() {
-				defer close(acked)
-				c.mu.Lock()
-				defer c.mu.Unlock()
-				c.waitAck(seqNr)
-			}()
-			for retry := 0; retry < 5; retry++ {
+			for retry := uint(0); retry < 5; retry++ {
 				select {
 				case <-acked:
 					return
-				case <-time.After(500*time.Millisecond + time.Duration(rand.Int63n(int64(time.Second)))):
+				case <-time.After((500*time.Millisecond + time.Duration(rand.Int63n(int64(time.Second)))) << retry):
 				}
 				log.Print("resend")
 				c.socket.WriteTo(p, c.remoteAddr)
@@ -378,6 +381,28 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 			c.destroy()
 			c.mu.Unlock()
 		}()
+	}
+	return
+}
+
+func (c *Conn) numUnackedSends() (num int) {
+	for _, s := range c.unackedSends {
+		select {
+		case <-s.acked:
+		default:
+			num++
+		}
+	}
+	return
+}
+
+func (c *Conn) cur_window() (window uint32) {
+	for _, s := range c.unackedSends {
+		select {
+		case <-s.acked:
+		default:
+			window += s.size
+		}
 	}
 	return
 }
@@ -419,7 +444,43 @@ func (c *Conn) sendState() {
 }
 
 func seqLess(a, b uint16) bool {
-	return a < b
+	if b < 0x8000 {
+		return a < b || a >= b-0x8000
+	} else {
+		return a < b && a >= b-0x8000
+	}
+}
+
+func (c *Conn) ack(nr uint16) {
+	// log.Printf("nr: %d, lastack: %d", nr, c.lastAck)
+	if !seqLess(c.lastAck, nr) {
+		return
+	}
+	i := nr - c.lastAck - 1
+	select {
+	case <-c.unackedSends[i].acked:
+	default:
+		close(c.unackedSends[i].acked)
+	}
+	for {
+		if len(c.unackedSends) == 0 {
+			break
+		}
+		select {
+		case <-c.unackedSends[0].acked:
+		default:
+			return
+		}
+		c.unackedSends = c.unackedSends[1:]
+		c.lastAck++
+	}
+	c.event.Broadcast()
+}
+
+func (c *Conn) ackTo(nr uint16) {
+	for seqLess(c.lastAck, nr) {
+		c.ack(c.lastAck + 1)
+	}
 }
 
 func (c *Conn) deliver(h header, payload []byte) {
@@ -429,9 +490,8 @@ func (c *Conn) deliver(h header, payload []byte) {
 	if h.ConnID != c.recv_id {
 		panic("wrong conn id")
 	}
-	if seqLess(c.lastAck, h.AckNr) {
-		c.lastAck = h.AckNr
-	}
+	c.peerWndSize = h.WndSize
+	c.ackTo(h.AckNr)
 	nowMicro := uint32(time.Now().Nanosecond() / 1000)
 	c.lastTimeDiff = nowMicro - h.Timestamp
 	if nowMicro < h.Timestamp {
@@ -525,6 +585,7 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 	_c.send_id = syn.conn_id
 	_c.recv_id = _c.send_id + 1
 	_c.seq_nr = uint16(rand.Int())
+	_c.lastAck = _c.seq_nr - 1
 	_c.ack_nr = syn.seq_nr
 	_c.cs = csConnected
 	s.registerConn(_c.recv_id, _c)
@@ -649,13 +710,16 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			err = io.ErrClosedPipe
 			return
 		}
+		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x100) && c.cs == csConnected {
+			// log.Printf("cur_window: %d, wnd_size: %d, unacked sends: %d", c.cur_window(), c.peerWndSize, len(c.unackedSends))
+			c.event.Wait()
+		}
 		var n1 int
 		n1, err = c.send(ST_DATA, c.send_id, p, c.seq_nr)
 		if err != nil {
 			return
 		}
 		c.seq_nr++
-		c.waitAck(c.seq_nr - 1)
 		n += n1
 		p = p[n1:]
 	}
