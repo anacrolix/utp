@@ -658,8 +658,11 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		if len(c.readBuf) != 0 {
 			break
 		}
-		if c.cs == csDestroy {
-			err = io.EOF
+		if c.cs == csDestroy || c.cs == csGotFin {
+			err = c.err
+			if err == nil {
+				err = io.EOF
+			}
 			return
 		}
 		if logLevel >= 2 {
