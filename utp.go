@@ -53,9 +53,11 @@ type header struct {
 }
 
 const (
-	logLevel   = 0
-	minMTU     = 576
-	recvWindow = 0x8000
+	logLevel       = 0
+	minMTU         = 576
+	recvWindow     = 0x8000
+	maxHeaderSize  = 20
+	maxPayloadSize = minMTU - maxHeaderSize
 )
 
 func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField) {
@@ -137,7 +139,8 @@ type Conn struct {
 	socket     net.PacketConn
 	remoteAddr net.Addr
 
-	cs int
+	cs  int
+	err error
 
 	unackedSends []send
 }
@@ -326,7 +329,7 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	return
 }
 
-func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
+func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err error) {
 	h := header{
 		Type:    _type,
 		Version: 1,
@@ -344,9 +347,6 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 		TimestampDiff: c.lastTimeDiff,
 	}
 	p := h.Marshal()
-	if len(payload) > minMTU-len(p) {
-		payload = payload[:minMTU-len(p)]
-	}
 	p = append(p, payload...)
 	if logLevel >= 1 {
 		log.Printf("writing utp msg: %s", packetDebugString(&h, payload))
@@ -358,10 +358,21 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 	if n1 != len(p) {
 		panic(n1)
 	}
+	return
+}
+
+func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
+	if len(payload) > maxPayloadSize {
+		payload = payload[:maxPayloadSize]
+	}
+	err = c.send(_type, connID, payload, seqNr)
+	if err != nil {
+		return
+	}
 	n = len(payload)
 	if _type != ST_STATE {
 		acked := make(chan struct{})
-		c.unackedSends = append(c.unackedSends, send{acked, uint32(len(p))})
+		c.unackedSends = append(c.unackedSends, send{acked, uint32(len(payload))})
 		go func() {
 			for retry := uint(0); retry < 5; retry++ {
 				select {
@@ -369,8 +380,8 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 					return
 				case <-time.After((500*time.Millisecond + time.Duration(rand.Int63n(int64(time.Second)))) << retry):
 				}
-				log.Print("resend")
-				c.socket.WriteTo(p, c.remoteAddr)
+				// log.Print("resend")
+				c.send(_type, connID, payload, seqNr)
 			}
 			select {
 			case <-acked:
@@ -378,7 +389,7 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (n i
 			case <-time.After(time.Second):
 			}
 			c.mu.Lock()
-			c.destroy()
+			c.destroy(errors.New("write timeout"))
 			c.mu.Unlock()
 		}()
 	}
@@ -440,7 +451,7 @@ func (c *Conn) timeoutFunc(seqNr uint16) func() {
 }
 
 func (c *Conn) sendState() {
-	c.send(ST_STATE, c.send_id, nil, c.seq_nr)
+	c.write(ST_STATE, c.send_id, nil, c.seq_nr)
 }
 
 func seqLess(a, b uint16) bool {
@@ -553,7 +564,7 @@ func (c *Conn) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq_nr = 1
-	_, err := c.send(ST_SYN, c.recv_id, nil, c.seq_nr)
+	_, err := c.write(ST_SYN, c.recv_id, nil, c.seq_nr)
 	if err != nil {
 		return err
 	}
@@ -643,8 +654,15 @@ func (c *Conn) finish() {
 	c.cs = csSentFin
 }
 
-func (c *Conn) destroy() {
+func (c *Conn) destroy(reason error) {
+	if c.err != nil {
+		log.Printf("duplicate destroy call: %s", reason)
+	}
+	if c.cs == csDestroy {
+		return
+	}
 	c.cs = csDestroy
+	c.err = reason
 	c.event.Broadcast()
 }
 
@@ -715,7 +733,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			c.event.Wait()
 		}
 		var n1 int
-		n1, err = c.send(ST_DATA, c.send_id, p, c.seq_nr)
+		n1, err = c.write(ST_DATA, c.send_id, p, c.seq_nr)
 		if err != nil {
 			return
 		}
