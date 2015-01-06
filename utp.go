@@ -35,6 +35,10 @@ type syn struct {
 	addr            net.Addr
 }
 
+const (
+	extensionTypeSelectiveAck = 1
+)
+
 type extensionField struct {
 	Type  byte
 	Bytes []byte
@@ -461,6 +465,16 @@ func (c *Conn) ackTo(nr uint16) {
 	}
 }
 
+type selectiveAckBitmask []byte
+
+func (me selectiveAckBitmask) NumBits() int {
+	return len(me) * 8
+}
+
+func (me selectiveAckBitmask) BitIsSet(index int) bool {
+	return me[index/8]>>uint(index%8)&1 == 1
+}
+
 func (c *Conn) deliver(h header, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -470,6 +484,19 @@ func (c *Conn) deliver(h header, payload []byte) {
 	}
 	c.peerWndSize = h.WndSize
 	c.ackTo(h.AckNr)
+	for _, ext := range h.Extensions {
+		switch ext.Type {
+		case extensionTypeSelectiveAck:
+			bitmask := selectiveAckBitmask(ext.Bytes)
+			for i := 0; i < bitmask.NumBits(); i++ {
+				if bitmask.BitIsSet(i) {
+					nr := h.AckNr + 2 + uint16(i)
+					log.Printf("selectively acked %d", nr)
+					c.ack(nr)
+				}
+			}
+		}
+	}
 	nowMicro := uint32(time.Now().Nanosecond() / 1000)
 	c.lastTimeDiff = nowMicro - h.Timestamp
 	if nowMicro < h.Timestamp {
@@ -705,7 +732,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			err = io.ErrClosedPipe
 			return
 		}
-		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x100) && c.cs == csConnected {
+		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x1000) && c.cs == csConnected {
 			// log.Printf("cur_window: %d, wnd_size: %d, unacked sends: %d", c.cur_window(), c.peerWndSize, len(c.unackedSends))
 			c.event.Wait()
 		}
