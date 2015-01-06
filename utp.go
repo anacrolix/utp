@@ -616,9 +616,16 @@ func (c *Conn) finish() {
 	if c.cs == csSentFin {
 		return
 	}
-	c.send(ST_FIN, c.send_id, nil, c.seq_nr)
+	finSeqNr := c.seq_nr
+	c.write(ST_FIN, c.send_id, nil, finSeqNr)
 	c.seq_nr++ // Spec says set to "eof_pkt".
 	c.cs = csSentFin
+	go func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.waitAck(finSeqNr)
+		c.destroy(nil)
+	}()
 }
 
 func (c *Conn) destroy(reason error) {
