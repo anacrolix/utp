@@ -10,6 +10,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/spacemonkeygo/monotime"
 )
 
 type Socket struct {
@@ -140,13 +142,16 @@ type Conn struct {
 
 	readBuf []byte
 
-	socket     net.PacketConn
-	remoteAddr net.Addr
+	socket         net.PacketConn
+	remoteAddr     net.Addr
+	startTimestamp uint32
 
 	cs  int
 	err error
 
 	unackedSends []send
+	// Inbound payloads, the first is ack_nr+1.
+	inbound []recv
 }
 
 type send struct {
@@ -154,9 +159,18 @@ type send struct {
 	size  uint32
 }
 
+type recv struct {
+	seen bool
+	data []byte
+}
+
 var (
 	_ net.Conn = &Conn{}
 )
+
+func (c *Conn) timestamp() uint32 {
+	return nowTimestamp() - c.startTimestamp
+}
 
 func (c *Conn) connected() bool {
 	return c.cs == csConnected
@@ -296,8 +310,9 @@ func (s *Socket) newConnID() (id uint16) {
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
-		socket:     s.pc,
-		remoteAddr: addr,
+		socket:         s.pc,
+		remoteAddr:     addr,
+		startTimestamp: nowTimestamp(),
 	}
 	c.event.L = &c.mu
 	return
@@ -333,21 +348,31 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	return
 }
 
+func (c *Conn) wndSize() uint32 {
+	var buffered int
+	for _, r := range c.inbound {
+		buffered += len(r.data)
+	}
+	buffered += len(c.readBuf)
+	if buffered >= recvWindow {
+		return 0
+	}
+	return recvWindow - uint32(buffered)
+}
+
+func nowTimestamp() uint32 {
+	return uint32(monotime.Monotonic() / time.Microsecond)
+}
+
 func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err error) {
 	h := header{
-		Type:    _type,
-		Version: 1,
-		ConnID:  connID,
-		SeqNr:   seqNr,
-		AckNr:   c.ack_nr,
-		WndSize: func() uint32 {
-			rblu32 := uint32(len(c.readBuf))
-			if rblu32 >= recvWindow {
-				return 0
-			}
-			return recvWindow - rblu32
-		}(),
-		Timestamp:     uint32(time.Now().Nanosecond() / 1000),
+		Type:          _type,
+		Version:       1,
+		ConnID:        connID,
+		SeqNr:         seqNr,
+		AckNr:         c.ack_nr,
+		WndSize:       c.wndSize(),
+		Timestamp:     c.timestamp(),
 		TimestampDiff: c.lastTimeDiff,
 	}
 	p := h.Marshal()
@@ -497,11 +522,12 @@ func (c *Conn) deliver(h header, payload []byte) {
 			}
 		}
 	}
-	nowMicro := uint32(time.Now().Nanosecond() / 1000)
-	c.lastTimeDiff = nowMicro - h.Timestamp
-	if nowMicro < h.Timestamp {
-		c.lastTimeDiff += 1000000
+	if h.Timestamp == 0 {
+		c.lastTimeDiff = 0
+	} else {
+		c.lastTimeDiff = c.timestamp() - h.Timestamp
 	}
+	// log.Printf("now micros: %d, header timestamp: %d, header diff: %d", c.timestamp(), h.Timestamp, h.TimestampDiff)
 	if c.cs == csSynSent {
 		if h.Type != ST_STATE {
 			return
@@ -513,17 +539,30 @@ func (c *Conn) deliver(h header, payload []byte) {
 	if h.Type == ST_STATE {
 		return
 	}
-	outOfOrder := false
-	if h.SeqNr == c.ack_nr+1 {
-		c.ack_nr = h.SeqNr
-	} else {
-		outOfOrder = true
-	}
-	c.sendState()
-	if outOfOrder {
-		log.Printf("out of order packet: expected %x got %x", c.ack_nr+1, h.SeqNr)
+	if !seqLess(c.ack_nr, h.SeqNr) {
+		// Already received this packet.
 		return
 	}
+	inboundIndex := int(h.SeqNr - c.ack_nr - 1)
+	if inboundIndex < len(c.inbound) && c.inbound[inboundIndex].seen {
+		// Already received this packet.
+		return
+	}
+	// Extend inbound so the new packet has a place.
+	for inboundIndex >= len(c.inbound) {
+		c.inbound = append(c.inbound, recv{})
+	}
+	if inboundIndex != 0 {
+		log.Printf("packet out of order, index=%d", inboundIndex)
+	}
+	c.inbound[inboundIndex] = recv{true, payload}
+	// Consume consecutive next packets.
+	for len(c.inbound) > 0 && c.inbound[0].seen {
+		c.ack_nr++
+		c.readBuf = append(c.readBuf, c.inbound[0].data...)
+		c.inbound = c.inbound[1:]
+	}
+	c.sendState()
 	if c.cs == csSentFin {
 		if !seqLess(h.AckNr, c.seq_nr-1) {
 			c.cs = csDestroy
@@ -535,11 +574,6 @@ func (c *Conn) deliver(h header, payload []byte) {
 		log.Print("set destroy")
 		c.cs = csDestroy
 	}
-	if logLevel >= 2 {
-		log.Printf("appending to readbuf")
-	}
-	c.readBuf = append(c.readBuf, payload...)
-	// c.event.Broadcast()
 }
 
 func (c *Conn) waitAck(seq uint16) {
@@ -732,7 +766,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			err = io.ErrClosedPipe
 			return
 		}
-		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x1000) && c.cs == csConnected {
+		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x4000) && c.cs == csConnected {
 			// log.Printf("cur_window: %d, wnd_size: %d, unacked sends: %d", c.cur_window(), c.peerWndSize, len(c.unackedSends))
 			c.event.Wait()
 		}
