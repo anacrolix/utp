@@ -8,13 +8,12 @@ import (
 	"net"
 	"os"
 
-	"bitbucket.org/anacrolix/go.torrent/util"
-
 	"bitbucket.org/anacrolix/utp"
+	"github.com/anacrolix/envpprof"
 )
 
 func main() {
-	util.LoggedHTTPServe("")
+	defer envpprof.Stop()
 	listen := flag.Bool("l", false, "listen")
 	port := flag.Int("p", 0, "port to listen on")
 	flag.Parse()
