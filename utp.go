@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"bitbucket.org/anacrolix/go.torrent/logonce"
+
 	"github.com/spacemonkeygo/monotime"
 )
 
@@ -73,23 +75,40 @@ const (
 	maxPayloadSize = minMTU - maxHeaderSize
 )
 
-func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField) {
+func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err error) {
 	for _type != 0 {
+		if _type != 1 {
+			logonce.Stderr.Printf("utp extension %d", _type)
+		}
+		if len(b) < 2 || len(b) < int(b[1])+2 {
+			err = fmt.Errorf("buffer ends prematurely: %x", b)
+			return
+		}
 		ef = append(ef, extensionField{
 			Type:  _type,
-			Bytes: append([]byte{}, b[2:b[1]+2]...),
+			Bytes: append([]byte{}, b[2:int(b[1])+2]...),
 		})
 		_type = b[0]
 		n += 2 + int(b[1])
+		b = b[2+int(b[1]):]
 	}
 	return
 }
+
+var errInvalidHeader = errors.New("invalid header")
 
 func (h *header) Unmarshal(b []byte) (n int, err error) {
 	// TODO: Are these endian-safe?
 	h.Type = int(b[0] >> 4)
 	h.Version = int(b[0] & 0xf)
-	n, h.Extensions = unmarshalExtensions(b[1], b[20:])
+	if h.Type > ST_MAX || h.Version != 1 {
+		err = errInvalidHeader
+		return
+	}
+	n, h.Extensions, err = unmarshalExtensions(b[1], b[20:])
+	if err != nil {
+		return
+	}
 	h.ConnID = binary.BigEndian.Uint16(b[2:4])
 	h.Timestamp = binary.BigEndian.Uint32(b[4:8])
 	h.TimestampDiff = binary.BigEndian.Uint32(b[8:12])
@@ -135,6 +154,8 @@ const (
 	ST_STATE
 	ST_RESET
 	ST_SYN
+
+	ST_MAX = ST_SYN
 )
 
 type Conn struct {
@@ -262,9 +283,13 @@ func (s *Socket) dispatcher() {
 		b := read.data
 		addr := read.from
 		var h header
-		hEnd, _ := h.Unmarshal(b)
+		hEnd, err := h.Unmarshal(b)
 		if logLevel >= 1 {
 			log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:]))
+		}
+		if err != nil || h.Type > ST_MAX || h.Version != 1 {
+			s.unusedRead(read)
+			continue
 		}
 		s.mu.Lock()
 		c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), h.ConnID}]
@@ -284,9 +309,6 @@ func (s *Socket) dispatcher() {
 			}
 			s.pushBacklog(syn)
 			continue
-		}
-		if logLevel >= 1 {
-			log.Printf("unhandled message from %s: %q", addr, b)
 		}
 		s.unusedRead(read)
 	}
