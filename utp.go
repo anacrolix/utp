@@ -14,11 +14,18 @@ import (
 	"github.com/spacemonkeygo/monotime"
 )
 
+type resolvedAddrStr string
+
+type connKey struct {
+	remoteAddr resolvedAddrStr
+	connID     uint16
+}
+
 type Socket struct {
 	mu          sync.Mutex
 	event       sync.Cond
 	pc          net.PacketConn
-	conns       map[uint16]*Conn
+	conns       map[connKey]*Conn
 	backlog     chan syn
 	reads       chan read
 	unusedReads chan read
@@ -260,7 +267,7 @@ func (s *Socket) dispatcher() {
 			log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:]))
 		}
 		s.mu.Lock()
-		c, ok := s.conns[h.ConnID]
+		c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), h.ConnID}]
 		s.mu.Unlock()
 		if ok {
 			c.deliver(h, b[hEnd:])
@@ -299,10 +306,10 @@ func DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
 
 }
 
-func (s *Socket) newConnID() (id uint16) {
+func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 	for {
 		id = uint16(rand.Int())
-		if _, ok := s.conns[id+1]; !ok {
+		if _, ok := s.conns[connKey{remoteAddr, id + 1}]; !ok {
 			return
 		}
 	}
@@ -328,9 +335,10 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 		return
 	}
 	c = s.newConn(netAddr)
-	c.recv_id = s.newConnID()
+	c.recv_id = s.newConnID(resolvedAddrStr(netAddr.String()))
 	c.send_id = c.recv_id + 1
-	s.registerConn(c.recv_id, c)
+	log.Printf("dial registering addr: %s", netAddr.String())
+	s.registerConn(c.recv_id, resolvedAddrStr(netAddr.String()), c)
 	connErr := make(chan error, 1)
 	go func() {
 		connErr <- c.connect()
@@ -606,32 +614,45 @@ func (c *Conn) connect() error {
 	return err
 }
 
-func (s *Socket) registerConn(recvID uint16, c *Conn) {
+// Returns true if the connection was newly registered, false otherwise.
+func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn) bool {
 	if s.conns == nil {
-		s.conns = make(map[uint16]*Conn)
+		s.conns = make(map[connKey]*Conn)
 	}
-	if _, ok := s.conns[recvID]; ok {
-		panic("multiple conns registered on same ID")
+	key := connKey{remoteAddr, recvID}
+	if _, ok := s.conns[key]; ok {
+		return false
 	}
-	s.conns[recvID] = c
+	s.conns[key] = c
+	return true
 }
 
 func (s *Socket) Accept() (c net.Conn, err error) {
-	syn := <-s.backlog
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_c := s.newConn(syn.addr)
-	_c.send_id = syn.conn_id
-	_c.recv_id = _c.send_id + 1
-	_c.seq_nr = uint16(rand.Int())
-	_c.lastAck = _c.seq_nr - 1
-	_c.ack_nr = syn.seq_nr
-	_c.cs = csConnected
-	s.registerConn(_c.recv_id, _c)
-	_c.sendState()
-	// _c.seq_nr++
-	c = _c
-	return
+	for {
+		syn, ok := <-s.backlog
+		if !ok {
+			err = errClosed
+			return
+		}
+		s.mu.Lock()
+		_c := s.newConn(syn.addr)
+		_c.send_id = syn.conn_id
+		_c.recv_id = _c.send_id + 1
+		_c.seq_nr = uint16(rand.Int())
+		_c.lastAck = _c.seq_nr - 1
+		_c.ack_nr = syn.seq_nr
+		_c.cs = csConnected
+		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr.String()), _c) {
+			// SYN duplicates existing connection.
+			s.mu.Unlock()
+			continue
+		}
+		_c.sendState()
+		// _c.seq_nr++
+		c = _c
+		s.mu.Unlock()
+		return
+	}
 }
 
 func (s *Socket) Addr() net.Addr {
