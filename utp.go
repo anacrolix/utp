@@ -169,8 +169,9 @@ const (
 )
 
 type Conn struct {
-	mu    sync.Mutex
-	event sync.Cond
+	mu         sync.Mutex
+	event      sync.Cond
+	destroying chan struct{}
 
 	recv_id, send_id uint16
 	seq_nr, ack_nr   uint16
@@ -357,6 +358,7 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		socket:         s.pc,
 		remoteAddr:     addr,
 		startTimestamp: nowTimestamp(),
+		destroying:     make(chan struct{}),
 	}
 	c.event.L = &c.mu
 	return
@@ -453,6 +455,8 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 				case <-acked:
 					return
 				case <-time.After((500*time.Millisecond + time.Duration(rand.Int63n(int64(time.Second)))) << retry):
+				case <-c.destroying:
+					return
 				}
 				c.mu.Lock()
 				c.send(_type, connID, payload, seqNr)
@@ -462,6 +466,8 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 			case <-acked:
 				return
 			case <-time.After(time.Second):
+			case <-c.destroying:
+				return
 			}
 			c.mu.Lock()
 			c.destroy(errors.New("write timeout"))
@@ -763,6 +769,7 @@ func (c *Conn) destroy(reason error) {
 	c.cs = csDestroy
 	c.err = reason
 	c.event.Broadcast()
+	close(c.destroying)
 }
 
 func (c *Conn) Close() error {
