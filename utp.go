@@ -72,7 +72,7 @@ const (
 	// Experimentation on localhost on OSX gives me this value. It appears to
 	// be the largest approximate datagram size before remote libutp starts
 	// selectively acking.
-	minMTU     = 1500
+	minMTU     = 576
 	recvWindow = 0x8000
 	// Does not take into account possible extensions, since currently we
 	// don't ever send any.
