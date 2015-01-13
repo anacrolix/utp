@@ -83,6 +83,9 @@ const (
 var (
 	errClosed         = errors.New("closed")
 	errNotImplemented = errors.New("not implemented")
+	// TODO: Possibly implement net.Error or something that provides a Timeout
+	// method.
+	errTimeout = errors.New("i/o timeout")
 )
 
 func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err error) {
@@ -169,9 +172,10 @@ const (
 )
 
 type Conn struct {
-	mu         sync.Mutex
-	event      sync.Cond
-	destroying chan struct{}
+	mu           sync.Mutex
+	event        sync.Cond
+	destroying   chan struct{}
+	readDeadline time.Time
 
 	recv_id, send_id uint16
 	seq_nr, ack_nr   uint16
@@ -191,6 +195,8 @@ type Conn struct {
 	unackedSends []send
 	// Inbound payloads, the first is ack_nr+1.
 	inbound []recv
+
+	readDeadlineTimer *time.Timer
 }
 
 type send struct {
@@ -361,6 +367,11 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		destroying:     make(chan struct{}),
 	}
 	c.event.L = &c.mu
+	c.readDeadlineTimer = time.AfterFunc(-1, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.event.Broadcast()
+	})
 	return
 }
 
@@ -797,6 +808,10 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			}
 			return
 		}
+		if !c.readDeadline.IsZero() && !time.Now().Before(c.readDeadline) {
+			err = errTimeout
+			return
+		}
 		if logLevel >= 2 {
 			log.Printf("nothing to read, state=%d", c.cs)
 		}
@@ -817,8 +832,12 @@ func (s *Conn) SetDeadline(time.Time) error {
 	return errNotImplemented
 }
 
-func (s *Conn) SetReadDeadline(time.Time) error {
-	return errNotImplemented
+func (c *Conn) SetReadDeadline(t time.Time) (err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readDeadline = t
+	c.readDeadlineTimer.Reset(t.Sub(time.Now()))
+	return
 }
 
 func (s *Conn) SetWriteDeadline(time.Time) error {
