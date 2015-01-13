@@ -80,6 +80,11 @@ const (
 	maxPayloadSize = minMTU - maxHeaderSize
 )
 
+var (
+	errClosed         = errors.New("closed")
+	errNotImplemented = errors.New("not implemented")
+)
+
 func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err error) {
 	for _type != 0 {
 		if _type != 1 {
@@ -717,15 +722,15 @@ func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (s *Socket) SetDeadline(time.Time) error {
-	return nil
+	return errNotImplemented
 }
 
 func (s *Socket) SetReadDeadline(time.Time) error {
-	return nil
+	return errNotImplemented
 }
 
 func (s *Socket) SetWriteDeadline(time.Time) error {
-	return nil
+	return errNotImplemented
 }
 
 func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
@@ -802,15 +807,15 @@ func (c *Conn) RemoteAddr() net.Addr {
 }
 
 func (s *Conn) SetDeadline(time.Time) error {
-	return nil
+	return errNotImplemented
 }
 
 func (s *Conn) SetReadDeadline(time.Time) error {
-	return nil
+	return errNotImplemented
 }
 
 func (s *Conn) SetWriteDeadline(time.Time) error {
-	return nil
+	return errNotImplemented
 }
 
 func (c *Conn) String() string {
