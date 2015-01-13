@@ -68,9 +68,14 @@ type header struct {
 }
 
 const (
-	logLevel       = 0
-	minMTU         = 576
-	recvWindow     = 0x8000
+	logLevel = 0
+	// Experimentation on localhost on OSX gives me this value. It appears to
+	// be the largest approximate datagram size before remote libutp starts
+	// selectively acking.
+	minMTU     = 650
+	recvWindow = 0x8000
+	// Does not take into account possible extensions, since currently we
+	// don't ever send any.
 	maxHeaderSize  = 20
 	maxPayloadSize = minMTU - maxHeaderSize
 )
@@ -246,6 +251,7 @@ func (s *Socket) reader() {
 }
 
 func (s *Socket) unusedRead(read read) {
+	// log.Printf("unused read from %q", read.from.String())
 	select {
 	case s.unusedReads <- read:
 	default:
@@ -601,7 +607,6 @@ func (c *Conn) deliver(h header, payload []byte) {
 	if h.Type == ST_FIN {
 		// Skip csGotFin because we can't be missing any packets with the
 		// current design.
-		log.Print("set destroy")
 		c.cs = csDestroy
 	}
 }
