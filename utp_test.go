@@ -4,12 +4,11 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"testing"
 	"time"
 
 	utp "."
 	"bitbucket.org/anacrolix/go.torrent/util"
-
-	"testing"
 )
 
 func TestUTPPingPong(t *testing.T) {
