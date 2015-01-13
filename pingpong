@@ -1,7 +1,11 @@
+set -eux
+function other_ucat() {
+	h2so5-ucat "$@" localhost:4000
+}
 md5 "$1"
-ucat -l -p 4000 | pv | md5 &
+other_ucat -l | pv | md5 &
 godo -race ./cmd/ucat localhost 4000 < "$1"
 wait
 godo -race ./cmd/ucat -l -p 4000 | pv | md5 &
-ucat localhost 4000 < "$1"
+other_ucat < "$1"
 wait
