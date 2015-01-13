@@ -674,8 +674,14 @@ func (s *Socket) LocalAddr() net.Addr {
 	return s.pc.LocalAddr()
 }
 
-func (s *Socket) ReadFrom([]byte) (int, net.Addr, error) {
-	return 0, nil, nil
+func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+	read, ok := <-s.unusedReads
+	if !ok {
+		err = io.EOF
+	}
+	n = copy(p, read.data)
+	addr = read.from
+	return
 }
 
 func (s *Socket) SetDeadline(time.Time) error {
@@ -690,8 +696,8 @@ func (s *Socket) SetWriteDeadline(time.Time) error {
 	return nil
 }
 
-func (s *Socket) WriteTo([]byte, net.Addr) (int, error) {
-	return 0, nil
+func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return s.pc.WriteTo(b, addr)
 }
 
 func (c *Conn) finish() {
