@@ -760,7 +760,7 @@ func (c *Conn) finish() {
 }
 
 func (c *Conn) destroy(reason error) {
-	if c.err != nil {
+	if c.err != nil && reason != nil {
 		log.Printf("duplicate destroy call: %s", reason)
 	}
 	if c.cs == csDestroy {
