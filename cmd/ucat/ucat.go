@@ -43,7 +43,8 @@ func main() {
 		defer close(writerDone)
 		written, err := io.Copy(conn, os.Stdin)
 		if err != nil {
-			log.Fatalf("error after writing %d bytes: %s", err)
+			conn.Close()
+			log.Fatalf("error after writing %d bytes: %s", written, err)
 		}
 		log.Printf("wrote %d bytes", written)
 		conn.Close()
