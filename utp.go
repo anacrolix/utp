@@ -527,6 +527,10 @@ func (c *Conn) ack(nr uint16) {
 		return
 	}
 	i := nr - c.lastAck - 1
+	if int(i) >= len(c.unackedSends) {
+		log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
+		return
+	}
 	select {
 	case <-c.unackedSends[i].acked:
 	default:
@@ -548,6 +552,9 @@ func (c *Conn) ack(nr uint16) {
 }
 
 func (c *Conn) ackTo(nr uint16) {
+	if !seqLess(nr, c.seq_nr) {
+		return
+	}
 	for seqLess(c.lastAck, nr) {
 		c.ack(c.lastAck + 1)
 	}
