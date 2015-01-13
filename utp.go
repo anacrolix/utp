@@ -755,7 +755,7 @@ func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 
 func (c *Conn) finish() {
-	if c.cs == csSentFin {
+	if c.cs != csConnected {
 		return
 	}
 	finSeqNr := c.seq_nr
