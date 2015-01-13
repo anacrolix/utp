@@ -213,7 +213,7 @@ func NewSocket(addr string) (s *Socket, err error) {
 	s = &Socket{
 		backlog:     make(chan syn, 5),
 		reads:       make(chan read, 1),
-		unusedReads: make(chan read, 1),
+		unusedReads: make(chan read, 100),
 		closing:     make(chan struct{}),
 	}
 	s.event.L = &s.mu
@@ -232,11 +232,14 @@ func packetDebugString(h *header, payload []byte) string {
 
 func (s *Socket) reader() {
 	defer close(s.reads)
+	var b []byte
 	for {
 		if s.pc == nil {
 			break
 		}
-		b := make([]byte, 2000)
+		if len(b) < 0x2000 {
+			b = make([]byte, 0x10000)
+		}
 		n, addr, err := s.pc.ReadFrom(b)
 		if err != nil {
 			select {
@@ -246,7 +249,8 @@ func (s *Socket) reader() {
 			}
 			return
 		}
-		s.reads <- read{b[:n], addr}
+		s.reads <- read{b[:n:n], addr}
+		b = b[n:]
 	}
 }
 
