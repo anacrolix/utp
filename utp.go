@@ -737,6 +737,7 @@ func (s *Socket) Close() (err error) {
 	case <-s.closing:
 	default:
 		close(s.closing)
+		close(s.backlog)
 	}
 	return
 }
