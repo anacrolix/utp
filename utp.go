@@ -92,8 +92,16 @@ var (
 	errNotImplemented = errors.New("not implemented")
 	// TODO: Possibly implement net.Error or something that provides a Timeout
 	// method.
-	errTimeout = errors.New("i/o timeout")
+	errTimeout = timeoutError{"i/o timeout"}
 )
+
+type timeoutError struct {
+	msg string
+}
+
+func (me timeoutError) Timeout() bool   { return true }
+func (me timeoutError) Error() string   { return me.msg }
+func (me timeoutError) Temporary() bool { return false }
 
 func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err error) {
 	for _type != 0 {
