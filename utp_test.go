@@ -152,3 +152,44 @@ func TestUTPRawConn(t *testing.T) {
 		t.Fatalf("messages received: %d", msgsReceived)
 	}
 }
+
+func TestConnReadDeadline(t *testing.T) {
+	ls, _ := NewSocket("localhost:0")
+	ds, _ := NewSocket("localhost:0")
+	go func() {
+		c, _ := ds.Dial(ls.Addr().String())
+		defer c.Close()
+		c.Read(nil)
+	}()
+	c, _ := ls.Accept()
+	dl := time.Now().Add(time.Millisecond)
+	c.SetReadDeadline(dl)
+	_, err := c.Read(nil)
+	if !err.(net.Error).Timeout() {
+		t.FailNow()
+	}
+	// The deadline has passed.
+	if !time.Now().After(dl) {
+		t.FailNow()
+	}
+	// Returns timeout on subsequent read.
+	_, err = c.Read(nil)
+	if !err.(net.Error).Timeout() {
+		t.FailNow()
+	}
+	// Disable the deadline.
+	c.SetReadDeadline(time.Time{})
+	readReturned := make(chan struct{})
+	go func() {
+		c.Read(nil)
+		close(readReturned)
+	}()
+	select {
+	case <-readReturned:
+		// Read returned but shouldn't have.
+		t.FailNow()
+	case <-time.After(time.Millisecond):
+	}
+	c.Close()
+	<-readReturned
+}
