@@ -7,7 +7,8 @@ import (
 	"testing"
 	"time"
 
-	utp "."
+	_ "github.com/anacrolix/envpprof"
+
 	"bitbucket.org/anacrolix/go.torrent/util"
 )
 
@@ -81,7 +82,7 @@ func TestMinMaxHeaderType(t *testing.T) {
 }
 
 func TestUTPRawConn(t *testing.T) {
-	l, err := utp.NewSocket("")
+	l, err := NewSocket("")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +97,8 @@ func TestUTPRawConn(t *testing.T) {
 	}()
 	// Connect a UTP peer to see if the RawConn will still work.
 	log.Print("dialing")
-	utpPeer, err := func() *utp.Socket {
-		s, _ := utp.NewSocket("")
+	utpPeer, err := func() *Socket {
+		s, _ := NewSocket("")
 		return s
 	}().Dial(fmt.Sprintf("localhost:%d", util.AddrPort(l.Addr())))
 	log.Print("dial returned")
