@@ -394,7 +394,9 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	c = s.newConn(netAddr)
 	c.recv_id = s.newConnID(resolvedAddrStr(netAddr.String()))
 	c.send_id = c.recv_id + 1
-	log.Printf("dial registering addr: %s", netAddr.String())
+	if logLevel >= 1 {
+		log.Printf("dial registering addr: %s", netAddr.String())
+	}
 	s.registerConn(c.recv_id, resolvedAddrStr(netAddr.String()), c)
 	connErr := make(chan error, 1)
 	go func() {
@@ -443,7 +445,7 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 	p := h.Marshal()
 	p = append(p, payload...)
 	if logLevel >= 1 {
-		log.Printf("writing utp msg: %s", packetDebugString(&h, payload))
+		log.Printf("writing utp msg to %s: %s", c.remoteAddr, packetDebugString(&h, payload))
 	}
 	n1, err := c.socket.WriteTo(p, c.remoteAddr)
 	if err != nil {
@@ -657,6 +659,7 @@ func (c *Conn) waitAck(seq uint16) {
 		if c.cs == csDestroy {
 			return
 		}
+		// TODO: Support being selectively acked.
 		if !seqLess(c.lastAck, seq) {
 			return
 		}
