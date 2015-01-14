@@ -8,6 +8,8 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -67,8 +69,13 @@ type header struct {
 	Extensions    []extensionField
 }
 
+var logLevel = 0
+
+func init() {
+	logLevel, _ = strconv.Atoi(os.Getenv("GO_UTP_LOGGING"))
+}
+
 const (
-	logLevel = 0
 	// Experimentation on localhost on OSX gives me this value. It appears to
 	// be the largest approximate datagram size before remote libutp starts
 	// selectively acking.
