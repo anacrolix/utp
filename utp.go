@@ -10,8 +10,13 @@ import (
 	"net"
 	"os"
 	"strconv"
-	"sync"
 	"time"
+
+	"bitbucket.org/anacrolix/sync"
+
+	"github.com/bradfitz/iter"
+
+	"github.com/anacrolix/jitter"
 
 	"bitbucket.org/anacrolix/go.torrent/logonce"
 
@@ -215,8 +220,20 @@ type Conn struct {
 }
 
 type send struct {
-	acked chan struct{}
-	size  uint32
+	acked       chan struct{}
+	payloadSize uint32
+	// This send was skipped in a selective ack.
+	ackSkipped chan struct{}
+	resend     func()
+	timedOut   func()
+}
+
+func (s *send) Ack() {
+	select {
+	case <-s.acked:
+	default:
+		close(s.acked)
+	}
 }
 
 type recv struct {
@@ -465,6 +482,71 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 	return
 }
 
+// Retry with successfully longer timeouts, before destroying the connection
+// after giving up.
+func (s *send) timeoutResender() {
+	// When to give up waiting for the last send to ack.
+	deadline := time.Now()
+	// Length of the next timeout.
+	timeout := time.Second
+	// Return true if we're acked, else return false when the last send times
+	// out.
+	wait := func() bool {
+		deadline = deadline.Add(timeout)
+		timeout *= 2
+		d := deadline.Sub(time.Now())
+		if d < 0 {
+			// I've seen this happen when running with race detector, it is
+			// probably due to the process struggling with CPU usage.
+			log.Printf("deadline for UTP resend ack is in the past %s", -d)
+			d = 0
+		}
+		select {
+		case <-s.acked:
+			return true
+		case <-time.After(jitter.Duration(d, d/3)):
+			return false
+		}
+	}
+	// Each wait will be 1, 2, 4, 8, 16s.
+	for range iter.N(5) {
+		if wait() {
+			return
+		}
+		s.resend()
+	}
+	// A last wait of 32s.
+	if wait() {
+		return
+	}
+	// At this point no ack has been received for 63s.
+	s.timedOut()
+}
+
+// Retry after every 3 packets received for which ack was skipped.
+func (s *send) ackSkippedResender() {
+	skips := 0
+	for {
+		select {
+		case <-s.ackSkipped:
+		case <-s.acked:
+			return
+		}
+		skips++
+		// This was done every 3 skips, but that turned out to be an awful
+		// lot.
+		if skips != 3 {
+			continue
+		}
+		if logLevel >= 1 {
+			log.Printf("3 acks skipped, resending")
+		}
+		// Somone holding the Conn lock can be sending to ackSkipped, so this
+		// is done asynchronously.
+		go s.resend()
+	}
+}
+
 func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
 	if len(payload) > maxPayloadSize {
 		payload = payload[:maxPayloadSize]
@@ -475,32 +557,28 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 	}
 	n = len(payload)
 	if _type != ST_STATE {
+		// Copy payload so caller to write can continue to use the buffer.
+		payload = append([]byte{}, payload...)
 		acked := make(chan struct{})
-		c.unackedSends = append(c.unackedSends, send{acked, uint32(len(payload))})
-		go func() {
-			for retry := uint(0); retry < 5; retry++ {
-				select {
-				case <-acked:
-					return
-				case <-time.After((500*time.Millisecond + time.Duration(rand.Int63n(int64(time.Second)))) << retry):
-				case <-c.destroying:
-					return
-				}
+		ackSkipped := make(chan struct{})
+		send := send{
+			acked,
+			uint32(len(payload)),
+			ackSkipped,
+			func() {
 				c.mu.Lock()
 				c.send(_type, connID, payload, seqNr)
 				c.mu.Unlock()
-			}
-			select {
-			case <-acked:
-				return
-			case <-time.After(time.Second):
-			case <-c.destroying:
-				return
-			}
-			c.mu.Lock()
-			c.destroy(errors.New("write timeout"))
-			c.mu.Unlock()
-		}()
+			},
+			func() {
+				c.mu.Lock()
+				c.destroy(errors.New("timed out waiting for ack"))
+				c.mu.Unlock()
+			},
+		}
+		c.unackedSends = append(c.unackedSends, send)
+		go send.timeoutResender()
+		go send.ackSkippedResender()
 	}
 	return
 }
@@ -521,7 +599,7 @@ func (c *Conn) cur_window() (window uint32) {
 		select {
 		case <-s.acked:
 		default:
-			window += s.size
+			window += s.payloadSize
 		}
 	}
 	return
@@ -539,8 +617,10 @@ func seqLess(a, b uint16) bool {
 	}
 }
 
+// Ack our send with the given sequence number.
 func (c *Conn) ack(nr uint16) {
 	if !seqLess(c.lastAck, nr) {
+		// Already acked.
 		return
 	}
 	i := nr - c.lastAck - 1
@@ -548,11 +628,7 @@ func (c *Conn) ack(nr uint16) {
 		log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
 		return
 	}
-	select {
-	case <-c.unackedSends[i].acked:
-	default:
-		close(c.unackedSends[i].acked)
-	}
+	c.unackedSends[i].Ack()
 	for {
 		if len(c.unackedSends) == 0 {
 			break
@@ -560,8 +636,10 @@ func (c *Conn) ack(nr uint16) {
 		select {
 		case <-c.unackedSends[0].acked:
 		default:
+			// Can't trim unacked sends any further.
 			return
 		}
+		// Trim the front of the unacked sends.
 		c.unackedSends = c.unackedSends[1:]
 		c.lastAck++
 	}
@@ -587,6 +665,26 @@ func (me selectiveAckBitmask) BitIsSet(index int) bool {
 	return me[index/8]>>uint(index%8)&1 == 1
 }
 
+func (c *Conn) seqSend(seqNr uint16) *send {
+	if !seqLess(c.lastAck, seqNr) {
+		return nil
+	}
+	i := int(seqNr - c.lastAck - 1)
+	if i >= len(c.unackedSends) {
+		return nil
+	}
+	return &c.unackedSends[i]
+}
+
+func (c *Conn) ackSkipped(seqNr uint16) {
+	send := c.seqSend(seqNr)
+	select {
+	case <-send.acked:
+	case send.ackSkipped <- struct{}{}:
+	}
+	// log.Printf("ack skipped: %d", seqNr)
+}
+
 func (c *Conn) deliver(h header, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -599,12 +697,15 @@ func (c *Conn) deliver(h header, payload []byte) {
 	for _, ext := range h.Extensions {
 		switch ext.Type {
 		case extensionTypeSelectiveAck:
+			c.ackSkipped(h.AckNr + 1)
 			bitmask := selectiveAckBitmask(ext.Bytes)
 			for i := 0; i < bitmask.NumBits(); i++ {
 				if bitmask.BitIsSet(i) {
 					nr := h.AckNr + 2 + uint16(i)
-					log.Printf("selectively acked %d", nr)
+					// log.Printf("selectively acked %d", nr)
 					c.ack(nr)
+				} else {
+					c.ackSkipped(h.AckNr + 2 + uint16(i))
 				}
 			}
 		}
@@ -807,6 +908,9 @@ func (c *Conn) destroy(reason error) {
 	c.err = reason
 	c.event.Broadcast()
 	close(c.destroying)
+	for _, s := range c.unackedSends {
+		s.Ack()
+	}
 }
 
 func (c *Conn) Close() error {
@@ -882,7 +986,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			err = io.ErrClosedPipe
 			return
 		}
-		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x4000) && c.cs == csConnected {
+		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x400) && c.cs == csConnected {
 			// log.Printf("cur_window: %d, wnd_size: %d, unacked sends: %d", c.cur_window(), c.peerWndSize, len(c.unackedSends))
 			c.event.Wait()
 		}
