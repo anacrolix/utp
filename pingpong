@@ -1,11 +1,21 @@
 set -eux
 function other_ucat() {
-	h2so5-ucat "$@" localhost:4000
+	# h2so5-ucat "$@" localhost:4000
+	if [[ $# != 0 ]]; then
+		libutp-ucat -l -p 4000
+		# h2so5-ucat -l localhost:4000
+
+	else
+		libutp-ucat localhost 4000
+		# h2so5-ucat localhost:4000
+	fi
 }
 md5 "$1"
 other_ucat -l | pv | md5 &
 godo -race ./cmd/ucat localhost 4000 < "$1"
 wait
-godo -race ./cmd/ucat -l -p 4000 | pv | md5 &
+GO_UTP_LOGGING=0 GOPPROF=http godo ./cmd/ucat -l -p 4000 | pv | md5 &
+# Never receive from h2so5's ucat without a small sleep first. Don't know why.
+# sleep 1
 other_ucat < "$1"
 wait
