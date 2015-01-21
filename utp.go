@@ -322,7 +322,6 @@ func (s *Socket) pushBacklog(syn syn) {
 }
 
 func (s *Socket) dispatcher() {
-	defer close(s.backlog)
 	for {
 		read, ok := <-s.reads
 		if !ok {
@@ -676,6 +675,9 @@ func (c *Conn) seqSend(seqNr uint16) *send {
 
 func (c *Conn) ackSkipped(seqNr uint16) {
 	send := c.seqSend(seqNr)
+	if send == nil {
+		return
+	}
 	select {
 	case <-send.acked:
 	case send.ackSkipped <- struct{}{}:
@@ -844,7 +846,6 @@ func (s *Socket) Close() (err error) {
 	case <-s.closing:
 	default:
 		close(s.closing)
-		close(s.backlog)
 	}
 	return
 }
