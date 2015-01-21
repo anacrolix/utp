@@ -90,6 +90,7 @@ const (
 	// don't ever send any.
 	maxHeaderSize  = 20
 	maxPayloadSize = minMTU - maxHeaderSize
+	maxRecvSize    = 0x2000
 )
 
 var (
@@ -276,15 +277,12 @@ func packetDebugString(h *header, payload []byte) string {
 
 func (s *Socket) reader() {
 	defer close(s.reads)
-	var b []byte
+	var b [maxRecvSize]byte
 	for {
 		if s.pc == nil {
 			break
 		}
-		if len(b) < 0x2000 {
-			b = make([]byte, 0x10000)
-		}
-		n, addr, err := s.pc.ReadFrom(b)
+		n, addr, err := s.pc.ReadFrom(b[:])
 		if err != nil {
 			select {
 			case <-s.closing:
@@ -293,8 +291,8 @@ func (s *Socket) reader() {
 			}
 			return
 		}
-		s.reads <- read{b[:n:n], addr}
-		b = b[n:]
+		var nilB []byte
+		s.reads <- read{append(nilB, b[:n:n]...), addr}
 	}
 }
 
