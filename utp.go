@@ -86,8 +86,7 @@ const (
 	// selectively acking.
 	minMTU     = 576
 	recvWindow = 0x8000
-	// Does not take into account possible extensions, since currently we
-	// don't ever send any.
+	// TODO: Does not take into account possible extensions we might send.
 	maxHeaderSize  = 20
 	maxPayloadSize = minMTU - maxHeaderSize
 	maxRecvSize    = 0x2000
