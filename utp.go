@@ -94,11 +94,9 @@ const (
 )
 
 var (
-	errClosed         = errors.New("closed")
-	errNotImplemented = errors.New("not implemented")
-	// TODO: Possibly implement net.Error or something that provides a Timeout
-	// method.
-	errTimeout = timeoutError{"i/o timeout"}
+	errClosed                   = errors.New("closed")
+	errNotImplemented           = errors.New("not implemented")
+	errTimeout        net.Error = timeoutError{"i/o timeout"}
 )
 
 type timeoutError struct {
