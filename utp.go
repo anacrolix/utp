@@ -86,8 +86,9 @@ const (
 	// selectively acking.
 	minMTU     = 576
 	recvWindow = 0x8000
-	// TODO: Does not take into account possible extensions we might send.
-	maxHeaderSize  = 20
+	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
+	// ACK.
+	maxHeaderSize  = 30
 	maxPayloadSize = minMTU - maxHeaderSize
 	maxRecvSize    = 0x2000
 )
@@ -150,11 +151,14 @@ func (h *header) Unmarshal(b []byte) (n int, err error) {
 	return
 }
 
-func (h *header) Marshal() (p []byte) {
-	if len(h.Extensions) != 0 {
-		panic("marshalling of extensions not implemented")
-	}
-	p = make([]byte, 20)
+func (h *header) Marshal() (ret []byte) {
+	ret = make([]byte, 20+func() (ret int) {
+		for _, ext := range h.Extensions {
+			ret += 2 + len(ext.Bytes)
+		}
+		return
+	}())
+	p := ret // Used for manipulating ret.
 	p[0] = byte(h.Type<<4 | 1)
 	binary.BigEndian.PutUint16(p[2:4], h.ConnID)
 	binary.BigEndian.PutUint32(p[4:8], h.Timestamp)
@@ -162,6 +166,23 @@ func (h *header) Marshal() (p []byte) {
 	binary.BigEndian.PutUint32(p[12:16], h.WndSize)
 	binary.BigEndian.PutUint16(p[16:18], h.SeqNr)
 	binary.BigEndian.PutUint16(p[18:20], h.AckNr)
+	// Pointer to the last type field so the next extension can set it.
+	_type := &p[1]
+	// We're done with the basic header.
+	p = p[20:]
+	for _, ext := range h.Extensions {
+		*_type = ext.Type
+		// The next extension's type will go here.
+		_type = &p[0]
+		p[1] = uint8(len(ext.Bytes))
+		if int(p[1]) != copy(p[2:], ext.Bytes) {
+			panic("unexpected extension length")
+		}
+		p = p[2+len(ext.Bytes):]
+	}
+	if len(p) != 0 {
+		panic("header length changed")
+	}
 	return
 }
 
@@ -450,7 +471,17 @@ func nowTimestamp() uint32 {
 	return uint32(monotime.Monotonic() / time.Microsecond)
 }
 
+// Send the given payload with an up to date header.
 func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err error) {
+	selAck := selectiveAckBitmask(make([]byte, 8))
+	for i := 1; i < 65; i++ {
+		if len(c.inbound) <= i {
+			break
+		}
+		if c.inbound[i].seen {
+			selAck.SetBit(i - 1)
+		}
+	}
 	h := header{
 		Type:          _type,
 		Version:       1,
@@ -460,8 +491,17 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 		WndSize:       c.wndSize(),
 		Timestamp:     c.timestamp(),
 		TimestampDiff: c.lastTimeDiff,
+		// Currently always send an 8 byte selective ack.
+		Extensions: []extensionField{{
+			Type:  extensionTypeSelectiveAck,
+			Bytes: selAck,
+		}},
 	}
 	p := h.Marshal()
+	// Extension headers are currently fixed in size.
+	if len(p) != maxHeaderSize {
+		panic("header has unexpected size")
+	}
 	p = append(p, payload...)
 	if logLevel >= 1 {
 		log.Printf("writing utp msg to %s: %s", c.remoteAddr, packetDebugString(&h, payload))
@@ -655,6 +695,10 @@ func (me selectiveAckBitmask) NumBits() int {
 	return len(me) * 8
 }
 
+func (me selectiveAckBitmask) SetBit(index int) {
+	me[index/8] |= 1 << uint(index%8)
+}
+
 func (me selectiveAckBitmask) BitIsSet(index int) bool {
 	return me[index/8]>>uint(index%8)&1 == 1
 }
@@ -738,7 +782,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 		c.inbound = append(c.inbound, recv{})
 	}
 	if inboundIndex != 0 {
-		log.Printf("packet out of order, index=%d", inboundIndex)
+		// log.Printf("packet out of order, index=%d", inboundIndex)
 	}
 	c.inbound[inboundIndex] = recv{true, payload}
 	// Consume consecutive next packets.
