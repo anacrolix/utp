@@ -777,6 +777,14 @@ func (c *Conn) deliver(h header, payload []byte) {
 		// Already received this packet.
 		return
 	}
+	// Derived from running in production:
+	// grep -oP '(?<=packet out of order, index=)\d+' log | sort -n | uniq -c
+	// 64 should correspond to 8 bytes of selective ack.
+	if inboundIndex >= 64 {
+		// Discard packet too far ahead.
+		log.Printf("received packet %d ahead of next seqnr (%x > %x)", inboundIndex, h.SeqNr, c.ack_nr+1)
+		return
+	}
 	// Extend inbound so the new packet has a place.
 	for inboundIndex >= len(c.inbound) {
 		c.inbound = append(c.inbound, recv{})
