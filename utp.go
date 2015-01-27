@@ -397,6 +397,7 @@ func DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
 
 }
 
+// TODO: Handle the case where no key can be found.
 func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 	for {
 		id = uint16(rand.Int())
