@@ -366,7 +366,15 @@ func (s *Socket) dispatcher() {
 			continue
 		}
 		s.mu.Lock()
-		c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), h.ConnID}]
+		c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
+			recvID = h.ConnID
+			// If a SYN is resent, its connection ID field will be one lower
+			// than we expect.
+			if h.Type == ST_SYN {
+				recvID++
+			}
+			return
+		}()}]
 		s.mu.Unlock()
 		if ok {
 			c.deliver(h, b[hEnd:])
@@ -736,9 +744,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.event.Broadcast()
-	if h.ConnID != c.recv_id {
-		panic("wrong conn id")
-	}
+	// if h.ConnID != c.recv_id {
+	// 	panic("wrong conn id")
+	// }
 	c.peerWndSize = h.WndSize
 	c.ackTo(h.AckNr)
 	for _, ext := range h.Extensions {
@@ -775,6 +783,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 		return
 	}
 	if !seqLess(c.ack_nr, h.SeqNr) {
+		if h.Type == ST_SYN {
+			c.sendState()
+		}
 		// Already received this packet.
 		return
 	}
@@ -879,6 +890,7 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 		_c.cs = csConnected
 		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr.String()), _c) {
 			// SYN duplicates existing connection.
+			s.conns[connKey{resolvedAddrStr(syn.addr.String()), _c.recv_id}].sendState()
 			s.mu.Unlock()
 			continue
 		}
