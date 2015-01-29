@@ -834,16 +834,14 @@ func (c *Conn) deliver(h header, payload []byte) {
 }
 
 func (c *Conn) waitAck(seq uint16) {
-	for {
-		if c.cs == csDestroy {
-			return
-		}
-		// TODO: Support being selectively acked.
-		if !seqLess(c.lastAck, seq) {
-			return
-		}
-		c.event.Wait()
+	send := c.seqSend(seq)
+	if send == nil {
+		return
 	}
+	c.mu.Unlock()
+	defer c.mu.Lock()
+	<-send.acked
+	return
 }
 
 func (c *Conn) connect() error {
