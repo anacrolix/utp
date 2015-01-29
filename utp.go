@@ -74,10 +74,15 @@ type header struct {
 	Extensions    []extensionField
 }
 
-var logLevel = 0
+var (
+	logLevel                   = 0
+	artificialPacketDropChance = 0.0
+)
 
 func init() {
 	logLevel, _ = strconv.Atoi(os.Getenv("GO_UTP_LOGGING"))
+	fmt.Sscanf(os.Getenv("GO_UTP_PACKET_DROP"), "%f", &artificialPacketDropChance)
+
 }
 
 const (
@@ -409,7 +414,7 @@ func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
-		socket:         s.pc,
+		socket:         s,
 		remoteAddr:     addr,
 		startTimestamp: nowTimestamp(),
 		destroying:     make(chan struct{}),
@@ -927,6 +932,12 @@ func (s *Socket) SetWriteDeadline(time.Time) error {
 }
 
 func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
+	if artificialPacketDropChance != 0 {
+		if rand.Float64() < artificialPacketDropChance {
+			// log.Printf("send dropped")
+			return len(b), nil
+		}
+	}
 	return s.pc.WriteTo(b, addr)
 }
 
