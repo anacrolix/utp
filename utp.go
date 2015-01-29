@@ -825,13 +825,11 @@ func (c *Conn) deliver(h header, payload []byte) {
 	c.sendState()
 	if c.cs == csSentFin {
 		if !seqLess(h.AckNr, c.seq_nr-1) {
-			c.cs = csDestroy
+			c.destroy(nil)
 		}
 	}
 	if h.Type == ST_FIN {
-		// Skip csGotFin because we can't be missing any packets with the
-		// current design.
-		c.cs = csDestroy
+		c.destroy(errors.New("peer sent FIN"))
 	}
 }
 
