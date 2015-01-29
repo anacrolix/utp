@@ -464,7 +464,7 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	case err = <-connErr:
 	case <-timeoutCh:
 		c.Close()
-		err = errors.New("dial timeout")
+		err = errTimeout
 	}
 	return
 }
