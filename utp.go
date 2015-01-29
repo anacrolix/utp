@@ -611,12 +611,10 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 	if _type != ST_STATE {
 		// Copy payload so caller to write can continue to use the buffer.
 		payload = append([]byte{}, payload...)
-		acked := make(chan struct{})
-		ackSkipped := make(chan struct{})
 		send := send{
-			acked,
+			make(chan struct{}),
 			uint32(len(payload)),
-			ackSkipped,
+			make(chan struct{}),
 			func() {
 				c.mu.Lock()
 				c.send(_type, connID, payload, seqNr)
@@ -721,12 +719,16 @@ func (me selectiveAckBitmask) BitIsSet(index int) bool {
 	return me[index/8]>>uint(index%8)&1 == 1
 }
 
+// Return the send state for the sequence number. Returns nil if there's no
+// outstanding send for that sequence number.
 func (c *Conn) seqSend(seqNr uint16) *send {
 	if !seqLess(c.lastAck, seqNr) {
+		// Presumably already acked.
 		return nil
 	}
 	i := int(seqNr - c.lastAck - 1)
 	if i >= len(c.unackedSends) {
+		// No such send.
 		return nil
 	}
 	return &c.unackedSends[i]
