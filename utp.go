@@ -596,6 +596,10 @@ func (s *send) ackSkippedResender() {
 }
 
 func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
+	if c.cs == csDestroy {
+		err = errors.New("conn being destroyed")
+		return
+	}
 	if len(payload) > maxPayloadSize {
 		payload = payload[:maxPayloadSize]
 	}
@@ -958,7 +962,10 @@ func (c *Conn) finish() {
 		return
 	}
 	finSeqNr := c.seq_nr
-	c.write(ST_FIN, c.send_id, nil, finSeqNr)
+	if _, err := c.write(ST_FIN, c.send_id, nil, finSeqNr); err != nil {
+		c.destroy(fmt.Errorf("error sending FIN: %s", err))
+		return
+	}
 	c.seq_nr++ // Spec says set to "eof_pkt".
 	c.cs = csSentFin
 	go func() {
