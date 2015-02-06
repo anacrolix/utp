@@ -1,3 +1,9 @@
+// Package utp implements uTP, the micro transport protocol as used with
+// Bittorrent. It opts for simplicity and reliability over correctness. It
+// allows using the underlying transport despite dispatching uTP on top to
+// allow for example, shared socket use with DHT. Additionally multiple uTP
+// connections can share the same OS socket, to truly realize uTP's claim to
+// be light on system and network switching resources.
 package utp
 
 import (
@@ -23,24 +29,44 @@ import (
 	"github.com/spacemonkeygo/monotime"
 )
 
+// Strongly-type guarantee of resolved network address.
 type resolvedAddrStr string
 
+// Uniquely identifies any uTP connection on top of the underlying packet
+// stream.
 type connKey struct {
 	remoteAddr resolvedAddrStr
 	connID     uint16
 }
 
+// A Socket wraps a net.PacketConn, diverting uTP packets to its child uTP
+// Conns. It can itself be used as a net.PacketConn for everything that isn't
+// uTP.
 type Socket struct {
-	mu          sync.Mutex
-	event       sync.Cond
-	pc          net.PacketConn
-	conns       map[connKey]*Conn
-	backlog     chan syn
-	reads       chan read
-	unusedReads chan read
-	closing     chan struct{}
+	mu      sync.Mutex
+	event   sync.Cond
+	pc      net.PacketConn
+	conns   map[connKey]*Conn
+	backlog chan syn
+	reads   chan read
+	closing chan struct{}
 
+	raw packetConn
+	// If a read error occurs on the underlying net.PacketConn, it is put
+	// here.
 	ReadErr error
+}
+
+// Returns a net.PacketConn that emulates the expected behaviour of the real
+// net.PacketConn underlying the Socket. It is not however the real one, as
+// Socket requires exclusive access to that.
+func (s *Socket) PacketConn() net.PacketConn {
+	return &s.raw
+}
+
+type packetConn struct {
+	real        net.PacketConn
+	unusedReads chan read
 }
 
 type read struct {
@@ -138,7 +164,7 @@ func (h *header) Unmarshal(b []byte) (n int, err error) {
 	// TODO: Are these endian-safe?
 	h.Type = int(b[0] >> 4)
 	h.Version = int(b[0] & 0xf)
-	if h.Type > ST_MAX || h.Version != 1 {
+	if h.Type > stMax || h.Version != 1 {
 		err = errInvalidHeader
 		return
 	}
@@ -193,7 +219,7 @@ func (h *header) Marshal() (ret []byte) {
 
 var (
 	_ net.Listener   = &Socket{}
-	_ net.PacketConn = &Socket{}
+	_ net.PacketConn = &packetConn{}
 )
 
 const (
@@ -206,15 +232,18 @@ const (
 )
 
 const (
-	ST_DATA = iota
-	ST_FIN
-	ST_STATE
-	ST_RESET
-	ST_SYN
+	stData = iota
+	stFin
+	stState
+	stReset
+	stSyn
 
-	ST_MAX = ST_SYN
+	// Used for validating packet headers.
+	stMax = stSyn
 )
 
+// Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
+// handles dispatching packets to and from Conns.
 type Conn struct {
 	mu           sync.Mutex
 	event        sync.Cond
@@ -277,18 +306,21 @@ func (c *Conn) connected() bool {
 	return c.cs == csConnected
 }
 
+// addr is used to create a listening UDP conn which becomes the underlying
+// net.PacketConn for the Socket.
 func NewSocket(addr string) (s *Socket, err error) {
 	s = &Socket{
-		backlog:     make(chan syn, 5),
-		reads:       make(chan read, 1),
-		unusedReads: make(chan read, 100),
-		closing:     make(chan struct{}),
+		backlog: make(chan syn, 5),
+		reads:   make(chan read, 1),
+		closing: make(chan struct{}),
 	}
 	s.event.L = &s.mu
 	s.pc, err = net.ListenPacket("udp", addr)
 	if err != nil {
 		return
 	}
+	s.raw.unusedReads = make(chan read, 100)
+	s.raw.real = s.pc
 	go s.reader()
 	go s.dispatcher()
 	return
@@ -322,7 +354,7 @@ func (s *Socket) reader() {
 func (s *Socket) unusedRead(read read) {
 	// log.Printf("unused read from %q", read.from.String())
 	select {
-	case s.unusedReads <- read:
+	case s.raw.unusedReads <- read:
 	default:
 	}
 }
@@ -361,7 +393,7 @@ func (s *Socket) dispatcher() {
 		if logLevel >= 1 {
 			log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:]))
 		}
-		if err != nil || h.Type > ST_MAX || h.Version != 1 {
+		if err != nil || h.Type > stMax || h.Version != 1 {
 			s.unusedRead(read)
 			continue
 		}
@@ -370,7 +402,7 @@ func (s *Socket) dispatcher() {
 			recvID = h.ConnID
 			// If a SYN is resent, its connection ID field will be one lower
 			// than we expect.
-			if h.Type == ST_SYN {
+			if h.Type == stSyn {
 				recvID++
 			}
 			return
@@ -380,7 +412,7 @@ func (s *Socket) dispatcher() {
 			c.deliver(h, b[hEnd:])
 			continue
 		}
-		if h.Type == ST_SYN {
+		if h.Type == stSyn {
 			if logLevel >= 1 {
 				log.Printf("adding SYN to backlog")
 			}
@@ -396,10 +428,13 @@ func (s *Socket) dispatcher() {
 	}
 }
 
+// Attempt to connect to a remote uTP listener, creating a Socket just for
+// this connection.
 func Dial(addr string) (c *Conn, err error) {
 	return DialTimeout(addr, 0)
 }
 
+// Same as Dial with a timeout parameter.
 func DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
 	s, err := NewSocket(":0")
 	if err != nil {
@@ -422,7 +457,7 @@ func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
-		socket:         s,
+		socket:         s.pc,
 		remoteAddr:     addr,
 		startTimestamp: nowTimestamp(),
 		destroying:     make(chan struct{}),
@@ -612,7 +647,7 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 		return
 	}
 	n = len(payload)
-	if _type != ST_STATE {
+	if _type != stState {
 		// Copy payload so caller to write can continue to use the buffer.
 		payload = append([]byte{}, payload...)
 		send := send{
@@ -660,7 +695,7 @@ func (c *Conn) cur_window() (window uint32) {
 }
 
 func (c *Conn) sendState() {
-	c.write(ST_STATE, c.send_id, nil, c.seq_nr)
+	c.write(stState, c.send_id, nil, c.seq_nr)
 }
 
 func seqLess(a, b uint16) bool {
@@ -782,18 +817,18 @@ func (c *Conn) deliver(h header, payload []byte) {
 	}
 	// log.Printf("now micros: %d, header timestamp: %d, header diff: %d", c.timestamp(), h.Timestamp, h.TimestampDiff)
 	if c.cs == csSynSent {
-		if h.Type != ST_STATE {
+		if h.Type != stState {
 			return
 		}
 		c.cs = csConnected
 		c.ack_nr = h.SeqNr - 1
 		return
 	}
-	if h.Type == ST_STATE {
+	if h.Type == stState {
 		return
 	}
 	if !seqLess(c.ack_nr, h.SeqNr) {
-		if h.Type == ST_SYN {
+		if h.Type == stSyn {
 			c.sendState()
 		}
 		// Already received this packet.
@@ -832,7 +867,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 			c.destroy(nil)
 		}
 	}
-	if h.Type == ST_FIN {
+	if h.Type == stFin {
 		c.destroy(errors.New("peer sent FIN"))
 	}
 }
@@ -852,7 +887,7 @@ func (c *Conn) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq_nr = 1
-	_, err := c.write(ST_SYN, c.recv_id, nil, c.seq_nr)
+	_, err := c.write(stSyn, c.recv_id, nil, c.seq_nr)
 	if err != nil {
 		return err
 	}
@@ -888,6 +923,7 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 	return true
 }
 
+// Accept and return a new uTP connection.
 func (s *Socket) Accept() (c net.Conn, err error) {
 	for {
 		syn, ok := <-s.backlog
@@ -917,10 +953,13 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 	}
 }
 
+// The address we're listening on for new uTP connections.
 func (s *Socket) Addr() net.Addr {
 	return s.pc.LocalAddr()
 }
 
+// TODO: Decide how this operates on the raw and underlying packet
+// connections, and the child uTP streams.
 func (s *Socket) Close() (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -932,11 +971,17 @@ func (s *Socket) Close() (err error) {
 	return
 }
 
-func (s *Socket) LocalAddr() net.Addr {
-	return s.pc.LocalAddr()
+// TODO: Currently does nothing. Should probably "close" the packet connection
+// to adher to the net.PacketConn protocol.
+func (s *packetConn) Close() (err error) {
+	return
 }
 
-func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+func (s *packetConn) LocalAddr() net.Addr {
+	return s.real.LocalAddr()
+}
+
+func (s *packetConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	read, ok := <-s.unusedReads
 	if !ok {
 		err = io.EOF
@@ -946,26 +991,26 @@ func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	return
 }
 
-func (s *Socket) SetDeadline(time.Time) error {
+func (s *packetConn) SetDeadline(time.Time) error {
 	return errNotImplemented
 }
 
-func (s *Socket) SetReadDeadline(time.Time) error {
+func (s *packetConn) SetReadDeadline(time.Time) error {
 	return errNotImplemented
 }
 
-func (s *Socket) SetWriteDeadline(time.Time) error {
+func (s *packetConn) SetWriteDeadline(time.Time) error {
 	return errNotImplemented
 }
 
-func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
+func (s *packetConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	if artificialPacketDropChance != 0 {
 		if rand.Float64() < artificialPacketDropChance {
 			// log.Printf("send dropped")
 			return len(b), nil
 		}
 	}
-	return s.pc.WriteTo(b, addr)
+	return s.real.WriteTo(b, addr)
 }
 
 func (c *Conn) finish() {
@@ -973,7 +1018,7 @@ func (c *Conn) finish() {
 		return
 	}
 	finSeqNr := c.seq_nr
-	if _, err := c.write(ST_FIN, c.send_id, nil, finSeqNr); err != nil {
+	if _, err := c.write(stFin, c.send_id, nil, finSeqNr); err != nil {
 		c.destroy(fmt.Errorf("error sending FIN: %s", err))
 		return
 	}
@@ -1081,7 +1126,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			c.event.Wait()
 		}
 		var n1 int
-		n1, err = c.write(ST_DATA, c.send_id, p, c.seq_nr)
+		n1, err = c.write(stData, c.send_id, p, c.seq_nr)
 		if err != nil {
 			return
 		}
