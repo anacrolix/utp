@@ -809,7 +809,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 	// 64 should correspond to 8 bytes of selective ack.
 	if inboundIndex >= 64 {
 		// Discard packet too far ahead.
-		log.Printf("received packet %d ahead of next seqnr (%x > %x)", inboundIndex, h.SeqNr, c.ack_nr+1)
+		logonce.Stderr.Printf("received packet %d ahead of next seqnr (%x > %x)", inboundIndex, h.SeqNr, c.ack_nr+1)
 		return
 	}
 	// Extend inbound so the new packet has a place.
