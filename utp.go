@@ -876,6 +876,15 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 		return false
 	}
 	s.conns[key] = c
+	go func() {
+		<-c.destroying
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.conns[key] != c {
+			panic("conn changed")
+		}
+		delete(s.conns, key)
+	}()
 	return true
 }
 
