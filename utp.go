@@ -445,6 +445,8 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	if err != nil {
 		return
 	}
+
+	s.mu.Lock()
 	c = s.newConn(netAddr)
 	c.recv_id = s.newConnID(resolvedAddrStr(netAddr.String()))
 	c.send_id = c.recv_id + 1
@@ -452,6 +454,8 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 		log.Printf("dial registering addr: %s", netAddr.String())
 	}
 	s.registerConn(c.recv_id, resolvedAddrStr(netAddr.String()), c)
+	s.mu.Unlock()
+
 	connErr := make(chan error, 1)
 	go func() {
 		connErr <- c.connect()
