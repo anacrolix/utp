@@ -33,6 +33,61 @@ import (
 	"github.com/spacemonkeygo/monotime"
 )
 
+type deadlineCallback struct {
+	deadline time.Time
+	timer    *time.Timer
+	callback func()
+	inited   bool
+}
+
+func (me *deadlineCallback) deadlineExceeded() bool {
+	return !me.deadline.IsZero() && !time.Now().Before(me.deadline)
+}
+
+func (me *deadlineCallback) updateTimer() {
+	if me.timer != nil {
+		me.timer.Stop()
+	}
+	if me.deadline.IsZero() {
+		return
+	}
+	if me.callback == nil {
+		panic("deadline callback is nil")
+	}
+	me.timer = time.AfterFunc(me.deadline.Sub(time.Now()), me.callback)
+}
+
+func (me *deadlineCallback) setDeadline(t time.Time) {
+	me.deadline = t
+	me.updateTimer()
+}
+
+func (me *deadlineCallback) setCallback(f func()) {
+	me.callback = f
+	me.updateTimer()
+}
+
+type connDeadlines struct {
+	// mu          sync.Mutex
+	read, write deadlineCallback
+}
+
+func (me *connDeadlines) SetDeadline(t time.Time) error {
+	me.read.setDeadline(t)
+	me.write.setDeadline(t)
+	return nil
+}
+
+func (me *connDeadlines) SetReadDeadline(t time.Time) error {
+	me.read.setDeadline(t)
+	return nil
+}
+
+func (me *connDeadlines) SetWriteDeadline(t time.Time) error {
+	me.write.setDeadline(t)
+	return nil
+}
+
 // Strongly-type guarantee of resolved network address.
 type resolvedAddrStr string
 
@@ -71,6 +126,7 @@ func (s *Socket) PacketConn() net.PacketConn {
 type packetConn struct {
 	real        net.PacketConn
 	unusedReads chan read
+	connDeadlines
 }
 
 type read struct {
@@ -249,10 +305,9 @@ const (
 // Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
 // handles dispatching packets to and from Conns.
 type Conn struct {
-	mu           sync.Mutex
-	event        sync.Cond
-	destroying   chan struct{}
-	readDeadline time.Time
+	mu         sync.Mutex
+	event      sync.Cond
+	destroying chan struct{}
 
 	recv_id, send_id uint16
 	seq_nr, ack_nr   uint16
@@ -273,7 +328,7 @@ type Conn struct {
 	// Inbound payloads, the first is ack_nr+1.
 	inbound []recv
 
-	readDeadlineTimer *time.Timer
+	connDeadlines
 }
 
 type send struct {
@@ -467,10 +522,15 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		destroying:     make(chan struct{}),
 	}
 	c.event.L = &c.mu
-	c.readDeadlineTimer = time.AfterFunc(-1, func() {
+	c.connDeadlines.read.setCallback(func() {
 		c.mu.Lock()
-		defer c.mu.Unlock()
 		c.event.Broadcast()
+		c.mu.Unlock()
+	})
+	c.connDeadlines.write.setCallback(func() {
+		c.mu.Lock()
+		c.event.Broadcast()
+		c.mu.Unlock()
 	})
 	return
 }
@@ -996,18 +1056,6 @@ func (s *packetConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	return
 }
 
-func (s *packetConn) SetDeadline(time.Time) error {
-	return errNotImplemented
-}
-
-func (s *packetConn) SetReadDeadline(time.Time) error {
-	return errNotImplemented
-}
-
-func (s *packetConn) SetWriteDeadline(time.Time) error {
-	return errNotImplemented
-}
-
 func (s *packetConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	if artificialPacketDropChance != 0 {
 		if rand.Float64() < artificialPacketDropChance {
@@ -1078,7 +1126,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			}
 			return
 		}
-		if !c.readDeadline.IsZero() && !time.Now().Before(c.readDeadline) {
+		if c.connDeadlines.read.deadlineExceeded() {
 			err = errTimeout
 			return
 		}
@@ -1096,22 +1144,6 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 
 func (c *Conn) RemoteAddr() net.Addr {
 	return c.remoteAddr
-}
-
-func (s *Conn) SetDeadline(time.Time) error {
-	return errNotImplemented
-}
-
-func (c *Conn) SetReadDeadline(t time.Time) (err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.readDeadline = t
-	c.readDeadlineTimer.Reset(t.Sub(time.Now()))
-	return
-}
-
-func (s *Conn) SetWriteDeadline(time.Time) error {
-	return errNotImplemented
 }
 
 func (c *Conn) String() string {
