@@ -873,7 +873,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 		}
 	}
 	if h.Type == stFin {
-		c.destroy(errors.New("peer sent FIN"))
+		c.destroy(nil)
 	}
 }
 

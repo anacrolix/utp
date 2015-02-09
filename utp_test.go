@@ -2,6 +2,7 @@ package utp
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"testing"
@@ -156,10 +157,12 @@ func TestUTPRawConn(t *testing.T) {
 func TestConnReadDeadline(t *testing.T) {
 	ls, _ := NewSocket("localhost:0")
 	ds, _ := NewSocket("localhost:0")
+	dcReadErr := make(chan error)
 	go func() {
 		c, _ := ds.Dial(ls.Addr().String())
 		defer c.Close()
-		c.Read(nil)
+		_, err := c.Read(nil)
+		dcReadErr <- err
 	}()
 	c, _ := ls.Accept()
 	dl := time.Now().Add(time.Millisecond)
@@ -192,4 +195,7 @@ func TestConnReadDeadline(t *testing.T) {
 	}
 	c.Close()
 	<-readReturned
+	if err := <-dcReadErr; err != io.EOF {
+		t.Fatalf("dial conn read returned %s", err)
+	}
 }
