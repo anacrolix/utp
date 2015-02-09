@@ -1,9 +1,13 @@
 // Package utp implements uTP, the micro transport protocol as used with
 // Bittorrent. It opts for simplicity and reliability over correctness. It
-// allows using the underlying transport despite dispatching uTP on top to
-// allow for example, shared socket use with DHT. Additionally multiple uTP
-// connections can share the same OS socket, to truly realize uTP's claim to
-// be light on system and network switching resources.
+// allows using the underlying OS-level transport despite dispatching uTP on
+// top to allow for example, shared socket use with DHT. Additionally,
+// multiple uTP connections can share the same OS socket, to truly realize
+// uTP's claim to be light on system and network switching resources.
+
+// Socket is a wrapper of net.UDPConn, and performs dispatching of uTP packets
+// to attached uTP Conns. Dial and Accept is done via Socket. Conn implements
+// net.Conn over uTP, via aforementioned Socket.
 package utp
 
 import (
@@ -647,6 +651,7 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 		return
 	}
 	n = len(payload)
+	// State messages aren't acknowledged, so there's nothing to resend.
 	if _type != stState {
 		// Copy payload so caller to write can continue to use the buffer.
 		payload = append([]byte{}, payload...)
