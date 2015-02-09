@@ -1158,8 +1158,21 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			err = io.ErrClosedPipe
 			return
 		}
-		for (c.cur_window() > c.peerWndSize || len(c.unackedSends) >= 0x400) && c.cs == csConnected {
-			// log.Printf("cur_window: %d, wnd_size: %d, unacked sends: %d", c.cur_window(), c.peerWndSize, len(c.unackedSends))
+		for {
+			// If we're not in a connected state, we let .write() give an
+			// appropriate error, below.
+			if c.cs != csConnected {
+				break
+			}
+			// If peerWndSize is 0, we still want to send something, so don't
+			// block until we exceed it.
+			if c.cur_window() <= c.peerWndSize && len(c.unackedSends) < 0x400 {
+				break
+			}
+			if c.connDeadlines.write.deadlineExceeded() {
+				err = errTimeout
+				return
+			}
 			c.event.Wait()
 		}
 		var n1 int
