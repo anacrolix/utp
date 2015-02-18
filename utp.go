@@ -305,9 +305,8 @@ const (
 // Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
 // handles dispatching packets to and from Conns.
 type Conn struct {
-	mu         sync.Mutex
-	event      sync.Cond
-	destroying chan struct{}
+	mu    sync.Mutex
+	event sync.Cond
 
 	recv_id, send_id uint16
 	seq_nr, ack_nr   uint16
@@ -320,6 +319,9 @@ type Conn struct {
 	socket         net.PacketConn
 	remoteAddr     net.Addr
 	startTimestamp uint32
+	// Callback to unregister Conn from a parent Socket. Should be called when
+	// no more packets will be handled.
+	detach func()
 
 	cs  int
 	err error
@@ -519,7 +521,6 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		socket:         s.pc,
 		remoteAddr:     addr,
 		startTimestamp: nowTimestamp(),
-		destroying:     make(chan struct{}),
 	}
 	c.event.L = &c.mu
 	c.connDeadlines.read.setCallback(func() {
@@ -976,15 +977,14 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 		return false
 	}
 	s.conns[key] = c
-	go func() {
-		<-c.destroying
+	c.detach = func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		if s.conns[key] != c {
 			panic("conn changed")
 		}
 		delete(s.conns, key)
-	}()
+	}
 	return true
 }
 
@@ -1005,7 +1005,8 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 		_c.ack_nr = syn.seq_nr
 		_c.cs = csConnected
 		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr.String()), _c) {
-			// SYN duplicates existing connection.
+			// SYN that triggered this accept duplicates existing connection.
+			// Ack again in case the SYN was a resend.
 			s.conns[connKey{resolvedAddrStr(syn.addr.String()), _c.recv_id}].sendState()
 			s.mu.Unlock()
 			continue
@@ -1095,7 +1096,7 @@ func (c *Conn) destroy(reason error) {
 	c.cs = csDestroy
 	c.err = reason
 	c.event.Broadcast()
-	close(c.destroying)
+	c.detach()
 	for _, s := range c.unackedSends {
 		s.Ack()
 	}
