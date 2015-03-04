@@ -553,8 +553,13 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	if logLevel >= 1 {
 		log.Printf("dial registering addr: %s", netAddr.String())
 	}
-	s.registerConn(c.recv_id, resolvedAddrStr(netAddr.String()), c)
+	if !s.registerConn(c.recv_id, resolvedAddrStr(netAddr.String()), c) {
+		err = errors.New("couldn't register new connection")
+	}
 	s.mu.Unlock()
+	if err != nil {
+		return
+	}
 
 	connErr := make(chan error, 1)
 	go func() {
