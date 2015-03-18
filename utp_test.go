@@ -10,6 +10,8 @@ import (
 
 	_ "github.com/anacrolix/envpprof"
 
+	"github.com/bradfitz/iter"
+
 	"bitbucket.org/anacrolix/go.torrent/util"
 )
 
@@ -197,5 +199,73 @@ func TestConnReadDeadline(t *testing.T) {
 	<-readReturned
 	if err := <-dcReadErr; err != io.EOF {
 		t.Fatalf("dial conn read returned %s", err)
+	}
+}
+
+func connectSelfLots(n int, t testing.TB) {
+	s, err := NewSocket("127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	go func() {
+		for range iter.N(n) {
+			c, err := s.Accept()
+			if err != nil {
+				log.Fatal(err)
+			}
+			defer c.Close()
+		}
+	}()
+	var conns []net.Conn
+	for range iter.N(n) {
+		c, err := s.DialTimeout(s.Addr().String(), 15*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conns = append(conns, c)
+		// log.Printf("%d", len(conns))
+	}
+	for _, c := range conns {
+		c.Close()
+	}
+	s.mu.Lock()
+	for len(s.conns) != 0 {
+		// log.Printf("socket conns: %d", len(s.conns))
+		s.event.Wait()
+	}
+	s.mu.Unlock()
+	s.Close()
+}
+
+// Connect to ourself heaps.
+func TestConnectSelf(t *testing.T) {
+	// A rough guess says that at worst, I can only have 0x10000/3 connections
+	// to the same socket, due to fragmentation in the assigned connection
+	// IDs.
+	connectSelfLots(func() int {
+		if testing.Short() {
+			return 0x100
+		} else {
+			return 0x5000
+		}
+	}(), t)
+}
+
+func BenchmarkConnectSelf(b *testing.B) {
+	for range iter.N(b.N) {
+		connectSelfLots(2, b)
+	}
+}
+
+func BenchmarkNewCloseSocket(b *testing.B) {
+	for range iter.N(b.N) {
+		s, err := NewSocket("localhost:0")
+		if err != nil {
+			b.Fatal(err)
+		}
+		err = s.Close()
+		if err != nil {
+			b.Fatal(err)
+		}
 	}
 }

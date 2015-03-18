@@ -99,8 +99,7 @@ type connKey struct {
 }
 
 // A Socket wraps a net.PacketConn, diverting uTP packets to its child uTP
-// Conns. It can itself be used as a net.PacketConn for everything that isn't
-// uTP.
+// Conns.
 type Socket struct {
 	mu      sync.Mutex
 	event   sync.Cond
@@ -112,7 +111,8 @@ type Socket struct {
 
 	raw packetConn
 	// If a read error occurs on the underlying net.PacketConn, it is put
-	// here.
+	// here. This is because reading is done in its own goroutine to dispatch
+	// to uTP Conns.
 	ReadErr error
 }
 
@@ -316,9 +316,12 @@ type Conn struct {
 
 	readBuf []byte
 
-	socket         net.PacketConn
-	remoteAddr     net.Addr
+	socket     net.PacketConn
+	remoteAddr net.Addr
+	// The uTP timestamp.
 	startTimestamp uint32
+	// When the conn was allocated.
+	created time.Time
 	// Callback to unregister Conn from a parent Socket. Should be called when
 	// no more packets will be handled.
 	detach func()
@@ -358,6 +361,10 @@ type recv struct {
 var (
 	_ net.Conn = &Conn{}
 )
+
+func (c *Conn) age() time.Duration {
+	return time.Since(c.created)
+}
 
 func (c *Conn) timestamp() uint32 {
 	return nowTimestamp() - c.startTimestamp
@@ -429,7 +436,8 @@ func (s *Socket) pushBacklog(syn syn) {
 			select {
 			case s.backlog <- syn:
 				return
-			case <-s.backlog:
+			case lost := <-s.backlog:
+				s.reset(lost.addr, lost.seq_nr, lost.conn_id)
 			default:
 				return
 			}
@@ -470,6 +478,15 @@ func (s *Socket) dispatcher() {
 		}()}]
 		s.mu.Unlock()
 		if ok {
+			if h.Type == stSyn && h.ConnID == c.send_id-2 {
+				// This is a SYN for connection that cannot exist locally. The
+				// connection the remote wants to establish here with the proposed
+				// recv_id, already has an existing connection that was dialled
+				// *out* from this socket, which is why the send_id is 1 higher,
+				// rather than 1 lower than the recv_id.
+				s.reset(addr, h.SeqNr, h.ConnID)
+				continue
+			}
 			c.deliver(h, b[hEnd:])
 			continue
 		}
@@ -484,9 +501,23 @@ func (s *Socket) dispatcher() {
 			}
 			s.pushBacklog(syn)
 			continue
+		} else if h.Type != stReset {
+			// This is an unexpected packet. We'll send a reset, but also pass
+			// it on.
+			s.reset(addr, h.SeqNr, h.ConnID)
 		}
 		s.unusedRead(read)
 	}
+}
+
+// Send a reset in response to a packet with the given header.
+func (s *Socket) reset(addr net.Addr, ackNr, connId uint16) {
+	go s.pc.WriteTo((&header{
+		Type:    stReset,
+		Version: 1,
+		ConnID:  connId,
+		AckNr:   ackNr,
+	}).Marshal(), addr)
 }
 
 // Attempt to connect to a remote uTP listener, creating a Socket just for
@@ -506,14 +537,45 @@ func DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
 
 }
 
-// TODO: Handle the case where no key can be found.
+// Return a recv_id that should be free. Handling the case where it isn't is
+// deferred to a more appropriate function.
 func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
-	for {
-		id = uint16(rand.Int())
-		if _, ok := s.conns[connKey{remoteAddr, id + 1}]; !ok {
+	// Rather than use math.Rand, which requires generating all the IDs up
+	// front and allocating a slice, we do it on the stack, generating the IDs
+	// only as required. To do this, we use the fact that the array is
+	// default-initialized. IDs that are 0, are actually their index in the
+	// array. IDs that are non-zero, are +1 from their intended ID.
+	var idsBack [0x10000]int
+	ids := idsBack[:]
+	for len(ids) != 0 {
+		// Pick the next ID from the untried ids.
+		i := rand.Intn(len(ids))
+		id = uint16(ids[i])
+		// If it's zero, then treat it as though the index i was the ID.
+		// Otherwise the value we get is the ID+1.
+		if id == 0 {
+			id = uint16(i)
+		} else {
+			id--
+		}
+		// Check there's no connection using this ID for its recv_id...
+		_, ok1 := s.conns[connKey{remoteAddr, id}]
+		// and if we're connecting to our own Socket, that there isn't a Conn
+		// already receiving on what will correspond to our send_id. Note that
+		// we just assume that we could be connecting to our own Socket. This
+		// will halve the available connection IDs to each distinct remote
+		// address. Presumably that's ~0x8000, down from ~0x10000.
+		_, ok2 := s.conns[connKey{remoteAddr, id + 1}]
+		if !ok1 && !ok2 {
 			return
 		}
+		// The set of possible IDs is shrinking. The highest one will be lost, so
+		// it's moved to the location of the one we just tried.
+		ids[i] = len(ids) // Conveniently already +1.
+		// And shrink.
+		ids = ids[:len(ids)-1]
 	}
+	return
 }
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
@@ -521,6 +583,7 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		socket:         s.pc,
 		remoteAddr:     addr,
 		startTimestamp: nowTimestamp(),
+		created:        time.Now(),
 	}
 	c.event.L = &c.mu
 	c.connDeadlines.read.setCallback(func() {
@@ -555,6 +618,11 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	}
 	if !s.registerConn(c.recv_id, resolvedAddrStr(netAddr.String()), c) {
 		err = errors.New("couldn't register new connection")
+		log.Println(c.recv_id, netAddr.String())
+		for k, c := range s.conns {
+			log.Println(k, c, c.age())
+		}
+		log.Printf("that's %d connections", len(s.conns))
 	}
 	s.mu.Unlock()
 	if err != nil {
@@ -860,9 +928,15 @@ func (c *Conn) deliver(h header, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.event.Broadcast()
-	// if h.ConnID != c.recv_id {
-	// 	panic("wrong conn id")
-	// }
+	if h.Type == stSyn {
+		if h.ConnID != c.send_id {
+			panic(fmt.Sprintf("%d != %d", h.ConnID, c.send_id))
+		}
+	} else {
+		if h.ConnID != c.recv_id {
+			panic("erroneous delivery")
+		}
+	}
 	c.peerWndSize = h.WndSize
 	c.ackTo(h.AckNr)
 	for _, ext := range h.Extensions {
@@ -887,6 +961,10 @@ func (c *Conn) deliver(h header, payload []byte) {
 		c.lastTimeDiff = c.timestamp() - h.Timestamp
 	}
 	// log.Printf("now micros: %d, header timestamp: %d, header diff: %d", c.timestamp(), h.Timestamp, h.TimestampDiff)
+	if h.Type == stReset {
+		c.destroy(errors.New("peer reset"))
+		return
+	}
 	if c.cs == csSynSent {
 		if h.Type != stState {
 			return
@@ -915,7 +993,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 	// 64 should correspond to 8 bytes of selective ack.
 	if inboundIndex >= 64 {
 		// Discard packet too far ahead.
-		logonce.Stderr.Printf("received packet %d ahead of next seqnr (%x > %x)", inboundIndex, h.SeqNr, c.ack_nr+1)
+		log.Printf("received packet %d ahead of next seqnr (%x > %x)", inboundIndex, h.SeqNr, c.ack_nr+1)
 		return
 	}
 	// Extend inbound so the new packet has a place.
@@ -968,6 +1046,9 @@ func (c *Conn) connect() error {
 	}
 	c.seq_nr++
 	c.waitAck(1)
+	if c.err != nil {
+		err = c.err
+	}
 	c.event.Broadcast()
 	return err
 }
@@ -989,6 +1070,7 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 			panic("conn changed")
 		}
 		delete(s.conns, key)
+		s.event.Broadcast()
 	}
 	return true
 }
@@ -1012,7 +1094,11 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr.String()), _c) {
 			// SYN that triggered this accept duplicates existing connection.
 			// Ack again in case the SYN was a resend.
-			s.conns[connKey{resolvedAddrStr(syn.addr.String()), _c.recv_id}].sendState()
+			_c = s.conns[connKey{resolvedAddrStr(syn.addr.String()), _c.recv_id}]
+			if _c.send_id != syn.conn_id {
+				panic(":|")
+			}
+			_c.sendState()
 			s.mu.Unlock()
 			continue
 		}
@@ -1039,6 +1125,7 @@ func (s *Socket) Close() (err error) {
 	default:
 		close(s.closing)
 	}
+	err = s.pc.Close()
 	return
 }
 
