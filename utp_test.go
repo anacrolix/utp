@@ -269,3 +269,38 @@ func BenchmarkNewCloseSocket(b *testing.B) {
 		}
 	}
 }
+
+func TestRejectDialBacklogFilled(t *testing.T) {
+	s, err := NewSocket("localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	errChan := make(chan error, 1)
+	dial := func() {
+		_, err := s.Dial(s.Addr().String())
+		if err != nil {
+			errChan <- err
+		}
+	}
+	// Fill the backlog.
+	for range iter.N(backlog + 1) {
+		go dial()
+	}
+	s.mu.Lock()
+	for len(s.backlog) < backlog {
+		s.event.Wait()
+	}
+	s.mu.Unlock()
+	select {
+	case <-errChan:
+		t.FailNow()
+	default:
+	}
+	// One more connection should cause a dial attempt to get reset.
+	go dial()
+	err = <-errChan
+	if err.Error() != "peer reset" {
+		t.FailNow()
+	}
+	s.Close()
+}

@@ -33,6 +33,10 @@ import (
 	"github.com/spacemonkeygo/monotime"
 )
 
+const (
+	backlog = 5
+)
+
 type deadlineCallback struct {
 	deadline time.Time
 	timer    *time.Timer
@@ -105,7 +109,7 @@ type Socket struct {
 	event   sync.Cond
 	pc      net.PacketConn
 	conns   map[connKey]*Conn
-	backlog chan syn
+	backlog map[syn]struct{}
 	reads   chan read
 	closing chan struct{}
 
@@ -136,7 +140,7 @@ type read struct {
 
 type syn struct {
 	seq_nr, conn_id uint16
-	addr            net.Addr
+	addr            string
 }
 
 const (
@@ -378,7 +382,7 @@ func (c *Conn) connected() bool {
 // net.PacketConn for the Socket.
 func NewSocket(addr string) (s *Socket, err error) {
 	s = &Socket{
-		backlog: make(chan syn, 5),
+		backlog: make(map[syn]struct{}, backlog),
 		reads:   make(chan read, 1),
 		closing: make(chan struct{}),
 	}
@@ -427,22 +431,27 @@ func (s *Socket) unusedRead(read read) {
 	}
 }
 
-func (s *Socket) pushBacklog(syn syn) {
-	for {
-		select {
-		case s.backlog <- syn:
-			return
-		default:
-			select {
-			case s.backlog <- syn:
-				return
-			case lost := <-s.backlog:
-				s.reset(lost.addr, lost.seq_nr, lost.conn_id)
-			default:
-				return
-			}
-		}
+func stringAddr(s string) net.Addr {
+	addr, err := net.ResolveUDPAddr("udp", s)
+	if err != nil {
+		panic(err)
 	}
+	return addr
+}
+
+func (s *Socket) pushBacklog(syn syn) {
+	if _, ok := s.backlog[syn]; ok {
+		return
+	}
+	for k := range s.backlog {
+		if len(s.backlog) < backlog {
+			break
+		}
+		delete(s.backlog, k)
+		s.reset(stringAddr(k.addr), k.seq_nr, k.conn_id)
+	}
+	s.backlog[syn] = struct{}{}
+	s.event.Broadcast()
 }
 
 func (s *Socket) dispatcher() {
@@ -497,7 +506,7 @@ func (s *Socket) dispatcher() {
 			syn := syn{
 				seq_nr:  h.SeqNr,
 				conn_id: h.ConnID,
-				addr:    addr,
+				addr:    addr.String(),
 			}
 			s.pushBacklog(syn)
 			continue
@@ -1075,26 +1084,45 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 	return true
 }
 
+func (s *Socket) nextSyn() (syn syn, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for {
+		for k := range s.backlog {
+			syn = k
+			delete(s.backlog, k)
+			ok = true
+			return
+		}
+		select {
+		case <-s.closing:
+			return
+		default:
+		}
+		s.event.Wait()
+	}
+}
+
 // Accept and return a new uTP connection.
 func (s *Socket) Accept() (c net.Conn, err error) {
 	for {
-		syn, ok := <-s.backlog
+		syn, ok := s.nextSyn()
 		if !ok {
 			err = errClosed
 			return
 		}
 		s.mu.Lock()
-		_c := s.newConn(syn.addr)
+		_c := s.newConn(stringAddr(syn.addr))
 		_c.send_id = syn.conn_id
 		_c.recv_id = _c.send_id + 1
 		_c.seq_nr = uint16(rand.Int())
 		_c.lastAck = _c.seq_nr - 1
 		_c.ack_nr = syn.seq_nr
 		_c.cs = csConnected
-		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr.String()), _c) {
+		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr), _c) {
 			// SYN that triggered this accept duplicates existing connection.
 			// Ack again in case the SYN was a resend.
-			_c = s.conns[connKey{resolvedAddrStr(syn.addr.String()), _c.recv_id}]
+			_c = s.conns[connKey{resolvedAddrStr(syn.addr), _c.recv_id}]
 			if _c.send_id != syn.conn_id {
 				panic(":|")
 			}
