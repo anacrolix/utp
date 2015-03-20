@@ -8,7 +8,7 @@ import (
 	"net"
 	"os"
 
-	"bitbucket.org/anacrolix/utp"
+	"github.com/anacrolix/utp"
 	"github.com/anacrolix/envpprof"
 )
 

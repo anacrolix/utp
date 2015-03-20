@@ -28,7 +28,7 @@ import (
 
 	"github.com/anacrolix/jitter"
 
-	"bitbucket.org/anacrolix/go.torrent/logonce"
+	"github.com/anacrolix/torrent/logonce"
 
 	"github.com/spacemonkeygo/monotime"
 )
