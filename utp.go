@@ -4,7 +4,7 @@
 // top to allow for example, shared socket use with DHT. Additionally,
 // multiple uTP connections can share the same OS socket, to truly realize
 // uTP's claim to be light on system and network switching resources.
-
+//
 // Socket is a wrapper of net.UDPConn, and performs dispatching of uTP packets
 // to attached uTP Conns. Dial and Accept is done via Socket. Conn implements
 // net.Conn over uTP, via aforementioned Socket.
