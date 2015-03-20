@@ -1,9 +1,10 @@
 // Package utp implements uTP, the micro transport protocol as used with
-// Bittorrent. It opts for simplicity and reliability over correctness. It
-// allows using the underlying OS-level transport despite dispatching uTP on
-// top to allow for example, shared socket use with DHT. Additionally,
-// multiple uTP connections can share the same OS socket, to truly realize
-// uTP's claim to be light on system and network switching resources.
+// Bittorrent. It opts for simplicity and reliability over strict adherence to
+// the (poor) spec. It allows using the underlying OS-level transport despite
+// dispatching uTP on top to allow for example, shared socket use with DHT.
+// Additionally, multiple uTP connections can share the same OS socket, to
+// truly realize uTP's claim to be light on system and network switching
+// resources.
 //
 // Socket is a wrapper of net.UDPConn, and performs dispatching of uTP packets
 // to attached uTP Conns. Dial and Accept is done via Socket. Conn implements
@@ -1143,8 +1144,8 @@ func (s *Socket) Addr() net.Addr {
 	return s.pc.LocalAddr()
 }
 
-// TODO: Decide how this operates on the raw and underlying packet
-// connections, and the child uTP streams.
+// Marks the Socket for close. Currently this just axes the underlying OS
+// socket.
 func (s *Socket) Close() (err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
