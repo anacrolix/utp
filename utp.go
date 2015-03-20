@@ -22,7 +22,7 @@ import (
 	"strconv"
 	"time"
 
-	"bitbucket.org/anacrolix/sync"
+	"github.com/anacrolix/sync"
 
 	"github.com/bradfitz/iter"
 
