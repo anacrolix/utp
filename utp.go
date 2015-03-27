@@ -23,14 +23,10 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/anacrolix/sync"
-
-	"github.com/bradfitz/iter"
-
 	"github.com/anacrolix/jitter"
-
+	"github.com/anacrolix/sync"
 	"github.com/anacrolix/torrent/logonce"
-
+	"github.com/bradfitz/iter"
 	"github.com/spacemonkeygo/monotime"
 )
 

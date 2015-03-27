@@ -9,10 +9,8 @@ import (
 	"time"
 
 	_ "github.com/anacrolix/envpprof"
-
-	"github.com/bradfitz/iter"
-
 	"github.com/anacrolix/torrent/util"
+	"github.com/bradfitz/iter"
 )
 
 func TestUTPPingPong(t *testing.T) {
