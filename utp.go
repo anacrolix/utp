@@ -703,6 +703,11 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 	if len(p) != maxHeaderSize {
 		panic("header has unexpected size")
 	}
+	if artificialPacketDropChance != 0 {
+		if rand.Float64() < artificialPacketDropChance {
+			return nil
+		}
+	}
 	p = append(p, payload...)
 	if logLevel >= 1 {
 		log.Printf("writing utp msg to %s: %s", c.remoteAddr, packetDebugString(&h, payload))
@@ -1179,12 +1184,6 @@ func (s *packetConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 }
 
 func (s *packetConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	if artificialPacketDropChance != 0 {
-		if rand.Float64() < artificialPacketDropChance {
-			// log.Printf("send dropped")
-			return len(b), nil
-		}
-	}
 	return s.real.WriteTo(b, addr)
 }
 
