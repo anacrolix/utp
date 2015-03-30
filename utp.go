@@ -530,18 +530,17 @@ func (s *Socket) reset(addr net.Addr, ackNr, connId uint16) {
 
 // Attempt to connect to a remote uTP listener, creating a Socket just for
 // this connection.
-func Dial(addr string) (c *Conn, err error) {
+func Dial(addr string) (net.Conn, error) {
 	return DialTimeout(addr, 0)
 }
 
 // Same as Dial with a timeout parameter.
-func DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
+func DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
 	s, err := NewSocket(":0")
 	if err != nil {
 		return
 	}
-	c, err = s.DialTimeout(addr, timeout)
-	return
+	return s.DialTimeout(addr, timeout)
 
 }
 
@@ -607,18 +606,18 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	return
 }
 
-func (s *Socket) Dial(addr string) (*Conn, error) {
+func (s *Socket) Dial(addr string) (net.Conn, error) {
 	return s.DialTimeout(addr, 0)
 }
 
-func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err error) {
+func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
 	netAddr, err := net.ResolveUDPAddr("udp", addr)
 	if err != nil {
 		return
 	}
 
 	s.mu.Lock()
-	c = s.newConn(netAddr)
+	c := s.newConn(netAddr)
 	c.recv_id = s.newConnID(resolvedAddrStr(netAddr.String()))
 	c.send_id = c.recv_id + 1
 	if logLevel >= 1 {
@@ -650,6 +649,9 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (c *Conn, err e
 	case <-timeoutCh:
 		c.Close()
 		err = errTimeout
+	}
+	if err == nil {
+		nc = c
 	}
 	return
 }
