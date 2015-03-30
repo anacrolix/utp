@@ -13,6 +13,10 @@ import (
 	"github.com/bradfitz/iter"
 )
 
+func init() {
+	log.SetFlags(log.Flags() | log.Lshortfile)
+}
+
 func TestUTPPingPong(t *testing.T) {
 	s, err := NewSocket("localhost:0")
 	if err != nil {
