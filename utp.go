@@ -505,7 +505,9 @@ func (s *Socket) dispatcher() {
 				conn_id: h.ConnID,
 				addr:    addr.String(),
 			}
+			s.mu.Lock()
 			s.pushBacklog(syn)
+			s.mu.Unlock()
 			continue
 		} else if h.Type != stReset {
 			// This is an unexpected packet. We'll send a reset, but also pass
