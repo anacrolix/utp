@@ -218,21 +218,41 @@ func connectSelfLots(n int, t testing.TB) {
 			defer c.Close()
 		}
 	}()
-	var conns []net.Conn
+	dialErr := make(chan error)
+	connCh := make(chan net.Conn)
 	for range iter.N(n) {
-		c, err := s.DialTimeout(s.Addr().String(), 15*time.Second)
-		if err != nil {
+		go func() {
+			c, err := s.Dial(s.Addr().String())
+			if err != nil {
+				dialErr <- err
+				return
+			}
+			connCh <- c
+		}()
+	}
+	conns := make([]net.Conn, 0, n)
+	for range iter.N(n) {
+		select {
+		case c := <-connCh:
+			conns = append(conns, c)
+		case err := <-dialErr:
 			t.Fatal(err)
 		}
-		conns = append(conns, c)
-		// log.Printf("%d", len(conns))
+		log.Printf("%x", len(conns))
 	}
 	for _, c := range conns {
-		c.Close()
+		if c != nil {
+			c.Close()
+		}
 	}
 	s.mu.Lock()
 	for len(s.conns) != 0 {
-		// log.Printf("socket conns: %d", len(s.conns))
+		log.Printf("socket conns: %d", len(s.conns))
+		if len(s.conns) < 10 {
+			for _, c := range s.conns {
+				log.Printf("%#v", c)
+			}
+		}
 		s.event.Wait()
 	}
 	s.mu.Unlock()
@@ -305,4 +325,19 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 		t.FailNow()
 	}
 	s.Close()
+}
+
+// Make sure that we can reset AfterFunc timers, so we don't have to create
+// brand new ones everytime they fire. Specifically for the Conn resend timer.
+func TestResetAfterFuncTimer(t *testing.T) {
+	fired := make(chan struct{})
+	timer := time.AfterFunc(time.Millisecond, func() {
+		fired <- struct{}{}
+	})
+	<-fired
+	if timer.Reset(time.Millisecond) {
+		// The timer should have expired
+		t.FailNow()
+	}
+	<-fired
 }

@@ -14,6 +14,7 @@ package utp
 import (
 	"encoding/binary"
 	"errors"
+	"expvar"
 	"fmt"
 	"io"
 	"log"
@@ -26,12 +27,15 @@ import (
 	"github.com/anacrolix/jitter"
 	"github.com/anacrolix/sync"
 	"github.com/anacrolix/torrent/logonce"
-	"github.com/bradfitz/iter"
 	"github.com/spacemonkeygo/monotime"
 )
 
 const (
-	backlog = 5
+	backlog = 50
+)
+
+var (
+	ackSkippedResends = expvar.NewInt("utpAckSkippedResends")
 )
 
 type deadlineCallback struct {
@@ -340,13 +344,17 @@ type Conn struct {
 type send struct {
 	acked       chan struct{}
 	payloadSize uint32
+	started     time.Time
 	// This send was skipped in a selective ack.
-	ackSkipped chan struct{}
-	resend     func()
-	timedOut   func()
+	acksSkipped int
+	resend      func()
+	timedOut    func()
+	resendTimer *time.Timer
+	numResends  int
 }
 
 func (s *send) Ack() {
+	s.resendTimer.Stop()
 	select {
 	case <-s.acked:
 	default:
@@ -445,6 +453,8 @@ func (s *Socket) pushBacklog(syn syn) {
 			break
 		}
 		delete(s.backlog, k)
+		// A syn is sent on the remote's recv_id, so this is where we can send
+		// the reset.
 		s.reset(stringAddr(k.addr), k.seq_nr, k.conn_id)
 	}
 	s.backlog[syn] = struct{}{}
@@ -484,14 +494,19 @@ func (s *Socket) dispatcher() {
 		}()}]
 		s.mu.Unlock()
 		if ok {
-			if h.Type == stSyn && h.ConnID == c.send_id-2 {
-				// This is a SYN for connection that cannot exist locally. The
-				// connection the remote wants to establish here with the proposed
-				// recv_id, already has an existing connection that was dialled
-				// *out* from this socket, which is why the send_id is 1 higher,
-				// rather than 1 lower than the recv_id.
-				s.reset(addr, h.SeqNr, h.ConnID)
-				continue
+			if h.Type == stSyn {
+				if h.ConnID == c.send_id-2 {
+					// This is a SYN for connection that cannot exist locally. The
+					// connection the remote wants to establish here with the proposed
+					// recv_id, already has an existing connection that was dialled
+					// *out* from this socket, which is why the send_id is 1 higher,
+					// rather than 1 lower than the recv_id.
+					log.Print("resetting conflicting syn")
+					s.reset(addr, h.SeqNr, h.ConnID)
+					continue
+				} else if h.ConnID != c.send_id {
+					panic("bad assumption")
+				}
 			}
 			c.deliver(h, b[hEnd:])
 			continue
@@ -512,7 +527,8 @@ func (s *Socket) dispatcher() {
 		} else if h.Type != stReset {
 			// This is an unexpected packet. We'll send a reset, but also pass
 			// it on.
-			s.reset(addr, h.SeqNr, h.ConnID)
+			// log.Print("resetting unexpected packet")
+			// s.reset(addr, h.SeqNr, h.ConnID)
 		}
 		s.unusedRead(read)
 	}
@@ -573,7 +589,8 @@ func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 		// will halve the available connection IDs to each distinct remote
 		// address. Presumably that's ~0x8000, down from ~0x10000.
 		_, ok2 := s.conns[connKey{remoteAddr, id + 1}]
-		if !ok1 && !ok2 {
+		_, ok4 := s.conns[connKey{remoteAddr, id - 1}]
+		if !ok1 && !ok2 && !ok4 {
 			return
 		}
 		// The set of possible IDs is shrinking. The highest one will be lost, so
@@ -722,69 +739,23 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 	return
 }
 
-// Retry with successfully longer timeouts, before destroying the connection
-// after giving up.
-func (s *send) timeoutResender() {
-	// When to give up waiting for the last send to ack.
-	deadline := time.Now()
-	// Length of the next timeout.
-	timeout := time.Second
-	// Return true if we're acked, else return false when the last send times
-	// out.
-	wait := func() bool {
-		deadline = deadline.Add(timeout)
-		timeout *= 2
-		d := deadline.Sub(time.Now())
-		if d < 0 {
-			// I've seen this happen when running with race detector, it is
-			// probably due to the process struggling with CPU usage.
-			log.Printf("deadline for UTP resend ack is in the past %s", -d)
-			d = 0
-		}
-		select {
-		case <-s.acked:
-			return true
-		case <-time.After(jitter.Duration(d, d/3)):
-			return false
-		}
-	}
-	// Each wait will be 1, 2, 4, 8, 16s.
-	for range iter.N(5) {
-		if wait() {
-			return
-		}
-		s.resend()
-	}
-	// A last wait of 32s.
-	if wait() {
-		return
-	}
-	// At this point no ack has been received for 63s.
-	s.timedOut()
+func (s *send) resendTimeout() time.Duration {
+	return jitter.Duration(3*time.Second, time.Second)
 }
 
-// Retry after every 3 packets received for which ack was skipped.
-func (s *send) ackSkippedResender() {
-	skips := 0
-	for {
-		select {
-		case <-s.ackSkipped:
-		case <-s.acked:
-			return
-		}
-		skips++
-		// This was done every 3 skips, but that turned out to be an awful
-		// lot.
-		if skips != 3 {
-			continue
-		}
-		if logLevel >= 1 {
-			log.Printf("3 acks skipped, resending")
-		}
-		// Somone holding the Conn lock can be sending to ackSkipped, so this
-		// is done asynchronously.
-		go s.resend()
+func (s *send) timeoutResend() {
+	select {
+	case <-s.acked:
+		return
+	default:
 	}
+	if time.Since(s.started) >= 15*time.Second {
+		s.timedOut()
+		return
+	}
+	s.resend()
+	s.numResends++
+	s.resendTimer.Reset(s.resendTimeout())
 }
 
 func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
@@ -805,23 +776,22 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 		// Copy payload so caller to write can continue to use the buffer.
 		payload = append([]byte{}, payload...)
 		send := send{
-			make(chan struct{}),
-			uint32(len(payload)),
-			make(chan struct{}),
-			func() {
+			acked:       make(chan struct{}),
+			payloadSize: uint32(len(payload)),
+			started:     time.Now(),
+			resend: func() {
 				c.mu.Lock()
 				c.send(_type, connID, payload, seqNr)
 				c.mu.Unlock()
 			},
-			func() {
+			timedOut: func() {
 				c.mu.Lock()
 				c.destroy(errors.New("timed out waiting for ack"))
 				c.mu.Unlock()
 			},
 		}
+		send.resendTimer = time.AfterFunc(send.resendTimeout(), send.timeoutResend)
 		c.unackedSends = append(c.unackedSends, send)
-		go send.timeoutResender()
-		go send.ackSkippedResender()
 	}
 	return
 }
@@ -932,11 +902,14 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	if send == nil {
 		return
 	}
-	select {
-	case <-send.acked:
-	case send.ackSkipped <- struct{}{}:
+	send.acksSkipped++
+	switch send.acksSkipped {
+	case 3, 60:
+		ackSkippedResends.Add(1)
+		go send.resend()
+		send.resendTimer.Reset(send.resendTimeout())
+	default:
 	}
-	// log.Printf("ack skipped: %d", seqNr)
 }
 
 func (c *Conn) deliver(h header, payload []byte) {
