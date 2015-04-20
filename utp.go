@@ -26,7 +26,6 @@ import (
 
 	"github.com/anacrolix/jitter"
 	"github.com/anacrolix/sync"
-	"github.com/anacrolix/torrent/logonce"
 	"github.com/spacemonkeygo/monotime"
 )
 
@@ -205,8 +204,12 @@ func (me timeoutError) Temporary() bool { return false }
 
 func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err error) {
 	for _type != 0 {
-		if _type != 1 {
-			logonce.Stderr.Printf("utp extension %d", _type)
+		if _type != extensionTypeSelectiveAck {
+			// An extension type that is not known to us. Generally we're
+			// unmarshalling an packet that isn't actually uTP but we don't
+			// yet know for sure until we try to deliver it.
+
+			// logonce.Stderr.Printf("utp extension %d", _type)
 		}
 		if len(b) < 2 || len(b) < int(b[1])+2 {
 			err = fmt.Errorf("buffer ends prematurely: %x", b)
