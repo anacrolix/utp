@@ -229,7 +229,6 @@ func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err 
 var errInvalidHeader = errors.New("invalid header")
 
 func (h *header) Unmarshal(b []byte) (n int, err error) {
-	// TODO: Are these endian-safe?
 	h.Type = int(b[0] >> 4)
 	h.Version = int(b[0] & 0xf)
 	if h.Type > stMax || h.Version != 1 {
