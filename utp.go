@@ -334,7 +334,7 @@ type Conn struct {
 	cs  int
 	err error
 
-	unackedSends []send
+	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
 	inbound []recv
 
@@ -342,18 +342,22 @@ type Conn struct {
 }
 
 type send struct {
-	acked       chan struct{}
+	acked       chan struct{} // Closed with Conn lock.
 	payloadSize uint32
 	started     time.Time
 	// This send was skipped in a selective ack.
+	resend   func()
+	timedOut func()
+
+	mu          sync.Mutex
 	acksSkipped int
-	resend      func()
-	timedOut    func()
 	resendTimer *time.Timer
 	numResends  int
 }
 
 func (s *send) Ack() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.resendTimer.Stop()
 	select {
 	case <-s.acked:
@@ -753,9 +757,11 @@ func (s *send) timeoutResend() {
 		s.timedOut()
 		return
 	}
-	s.resend()
+	go s.resend()
+	s.mu.Lock()
 	s.numResends++
 	s.resendTimer.Reset(s.resendTimeout())
+	s.mu.Unlock()
 }
 
 func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
@@ -775,7 +781,7 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 	if _type != stState {
 		// Copy payload so caller to write can continue to use the buffer.
 		payload = append([]byte{}, payload...)
-		send := send{
+		send := &send{
 			acked:       make(chan struct{}),
 			payloadSize: uint32(len(payload)),
 			started:     time.Now(),
@@ -790,7 +796,9 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 				c.mu.Unlock()
 			},
 		}
+		send.mu.Lock()
 		send.resendTimer = time.AfterFunc(send.resendTimeout(), send.timeoutResend)
+		send.mu.Unlock()
 		c.unackedSends = append(c.unackedSends, send)
 	}
 	return
@@ -894,7 +902,7 @@ func (c *Conn) seqSend(seqNr uint16) *send {
 		// No such send.
 		return nil
 	}
-	return &c.unackedSends[i]
+	return c.unackedSends[i]
 }
 
 func (c *Conn) ackSkipped(seqNr uint16) {
@@ -902,6 +910,8 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	if send == nil {
 		return
 	}
+	send.mu.Lock()
+	defer send.mu.Unlock()
 	send.acksSkipped++
 	switch send.acksSkipped {
 	case 3, 60:
