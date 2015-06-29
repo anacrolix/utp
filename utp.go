@@ -198,6 +198,7 @@ var (
 	errClosed                   = errors.New("closed")
 	errNotImplemented           = errors.New("not implemented")
 	errTimeout        net.Error = timeoutError{"i/o timeout"}
+	errAckTimeout               = timeoutError{"timed out waiting for ack"}
 )
 
 type timeoutError struct {
@@ -806,7 +807,7 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 			},
 			timedOut: func() {
 				c.mu.Lock()
-				c.destroy(errors.New("timed out waiting for ack"))
+				c.destroy(errAckTimeout)
 				c.mu.Unlock()
 			},
 		}
