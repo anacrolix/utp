@@ -10,13 +10,14 @@ set -eu
 
 # Passed to invocations of godo for package ./cmd/ucat.
 #GODOFLAGS=-race
+#export GO_UTP_PACKET_DROP=0.1
 
 # Invokes the implementation to test against. If there's an arg, then it's
 # expected to listen.
 function other_ucat() {
 	if [[ $# != 0 ]]; then
 		libutp-ucat -l -p 4000
-		# h2so5-ucat -l localhost:4000
+		# h2so5-ucat -l :4000
 	else
 		libutp-ucat localhost 4000
 		# h2so5-ucat localhost:4000
@@ -28,6 +29,7 @@ md5 "$1"
 
 # Send from this uTP implementation to another client.
 other_ucat -l | pv | md5 &
+# sleep 1
 godo ${GODOFLAGS-} ./cmd/ucat  localhost 4000 < "$1"
 wait
 
