@@ -183,12 +183,15 @@ const (
 	// be the largest approximate datagram size before remote libutp starts
 	// selectively acking.
 	minMTU     = 576
-	recvWindow = 0x8000
+	recvWindow = 0x8000 // 32KiB
 	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
 	// ACK.
 	maxHeaderSize  = 30
 	maxPayloadSize = minMTU - maxHeaderSize
 	maxRecvSize    = 0x2000
+
+	// Maximum out-of-order packets to buffer.
+	maxUnackedInbound = 64
 )
 
 var (
@@ -685,6 +688,9 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 }
 
 func (c *Conn) wndSize() uint32 {
+	if len(c.inbound) > maxUnackedInbound/2 {
+		return 0
+	}
 	var buffered int
 	for _, r := range c.inbound {
 		buffered += len(r.data)
@@ -997,9 +1003,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 	// Derived from running in production:
 	// grep -oP '(?<=packet out of order, index=)\d+' log | sort -n | uniq -c
 	// 64 should correspond to 8 bytes of selective ack.
-	if inboundIndex >= 64 {
+	if inboundIndex >= maxUnackedInbound {
 		// Discard packet too far ahead.
-		log.Printf("received packet %d ahead of next seqnr (%x > %x)", inboundIndex, h.SeqNr, c.ack_nr+1)
+		log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
 		return
 	}
 	// Extend inbound so the new packet has a place.
@@ -1278,7 +1284,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			}
 			// If peerWndSize is 0, we still want to send something, so don't
 			// block until we exceed it.
-			if c.cur_window() <= c.peerWndSize && len(c.unackedSends) < 0x400 {
+			if c.cur_window() <= c.peerWndSize && len(c.unackedSends) < 64 {
 				break
 			}
 			if c.connDeadlines.write.deadlineExceeded() {
