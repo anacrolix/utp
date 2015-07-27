@@ -30,6 +30,9 @@ import (
 )
 
 const (
+	// Maximum received SYNs that haven't been accepted. If more SYNs are
+	// received, a pseudo randomly selected SYN is replied to with a reset to
+	// make room.
 	backlog = 50
 
 	// Experimentation on localhost on OSX gives me this value. It appears to
@@ -93,19 +96,19 @@ type connDeadlines struct {
 	read, write deadlineCallback
 }
 
-func (me *connDeadlines) SetDeadline(t time.Time) error {
-	me.read.setDeadline(t)
-	me.write.setDeadline(t)
+func (c *connDeadlines) SetDeadline(t time.Time) error {
+	c.read.setDeadline(t)
+	c.write.setDeadline(t)
 	return nil
 }
 
-func (me *connDeadlines) SetReadDeadline(t time.Time) error {
-	me.read.setDeadline(t)
+func (c *connDeadlines) SetReadDeadline(t time.Time) error {
+	c.read.setDeadline(t)
 	return nil
 }
 
-func (me *connDeadlines) SetWriteDeadline(t time.Time) error {
-	me.write.setDeadline(t)
+func (c *connDeadlines) SetWriteDeadline(t time.Time) error {
+	c.write.setDeadline(t)
 	return nil
 }
 
