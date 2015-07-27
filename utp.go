@@ -31,6 +31,20 @@ import (
 
 const (
 	backlog = 50
+
+	// Experimentation on localhost on OSX gives me this value. It appears to
+	// be the largest approximate datagram size before remote libutp starts
+	// selectively acking.
+	minMTU     = 576
+	recvWindow = 0x8000 // 32KiB
+	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
+	// ACK.
+	maxHeaderSize  = 30
+	maxPayloadSize = minMTU - maxHeaderSize
+	maxRecvSize    = 0x2000
+
+	// Maximum out-of-order packets to buffer.
+	maxUnackedInbound = 64
 )
 
 var (
@@ -177,22 +191,6 @@ func init() {
 	fmt.Sscanf(os.Getenv("GO_UTP_PACKET_DROP"), "%f", &artificialPacketDropChance)
 
 }
-
-const (
-	// Experimentation on localhost on OSX gives me this value. It appears to
-	// be the largest approximate datagram size before remote libutp starts
-	// selectively acking.
-	minMTU     = 576
-	recvWindow = 0x8000 // 32KiB
-	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
-	// ACK.
-	maxHeaderSize  = 30
-	maxPayloadSize = minMTU - maxHeaderSize
-	maxRecvSize    = 0x2000
-
-	// Maximum out-of-order packets to buffer.
-	maxUnackedInbound = 64
-)
 
 var (
 	errClosed                   = errors.New("closed")
