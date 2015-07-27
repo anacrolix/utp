@@ -8,8 +8,9 @@ import (
 	"net"
 	"os"
 
-	"github.com/anacrolix/utp"
 	"github.com/anacrolix/envpprof"
+
+	"github.com/anacrolix/utp"
 )
 
 func main() {
