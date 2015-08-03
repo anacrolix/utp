@@ -148,9 +148,12 @@ func (s *Socket) PacketConn() net.PacketConn {
 }
 
 type packetConn struct {
-	real        net.PacketConn
-	unusedReads chan read
+	real net.PacketConn
 	connDeadlines
+
+	mu          sync.Mutex
+	unusedReads chan read
+	closed      bool
 }
 
 type read struct {
@@ -446,6 +449,11 @@ func (s *Socket) reader() {
 
 func (s *Socket) unusedRead(read read) {
 	// log.Printf("unused read from %q", read.from.String())
+	s.raw.mu.Lock()
+	defer s.raw.mu.Unlock()
+	if s.raw.closed {
+		return
+	}
 	select {
 	case s.raw.unusedReads <- read:
 	default:
@@ -1155,16 +1163,26 @@ func (s *Socket) Close() (err error) {
 	defer s.mu.Unlock()
 	select {
 	case <-s.closing:
+		return
 	default:
-		close(s.closing)
 	}
-	err = s.pc.Close()
+	close(s.closing)
+	s.raw.Close()
+	s.pc.Close()
+	s.event.Broadcast()
 	return
 }
 
 // TODO: Currently does nothing. Should probably "close" the packet connection
 // to adher to the net.PacketConn protocol.
-func (s *packetConn) Close() (err error) {
+func (me *packetConn) Close() (err error) {
+	me.mu.Lock()
+	defer me.mu.Unlock()
+	if me.closed {
+		return
+	}
+	close(me.unusedReads)
+	me.closed = true
 	return
 }
 
