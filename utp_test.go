@@ -257,13 +257,7 @@ func TestConnectSelf(t *testing.T) {
 	// A rough guess says that at worst, I can only have 0x10000/3 connections
 	// to the same socket, due to fragmentation in the assigned connection
 	// IDs.
-	connectSelfLots(func() int {
-		if testing.Short() {
-			return 0x100
-		} else {
-			return 0x5000
-		}
-	}(), t)
+	connectSelfLots(0x100, t)
 }
 
 func BenchmarkConnectSelf(b *testing.B) {
