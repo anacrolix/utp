@@ -9,7 +9,7 @@ import (
 	"time"
 
 	_ "github.com/anacrolix/envpprof"
-	"github.com/anacrolix/torrent/util"
+	"github.com/anacrolix/missinggo"
 	"github.com/bradfitz/iter"
 )
 
@@ -105,7 +105,7 @@ func TestUTPRawConn(t *testing.T) {
 	utpPeer, err := func() *Socket {
 		s, _ := NewSocket("")
 		return s
-	}().Dial(fmt.Sprintf("localhost:%d", util.AddrPort(l.Addr())))
+	}().Dial(fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
 	log.Print("dial returned")
 	if err != nil {
 		t.Fatalf("error dialing utp listener: %s", err)
@@ -137,7 +137,7 @@ func TestUTPRawConn(t *testing.T) {
 			}
 		}
 	}()
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("localhost:%d", util.AddrPort(l.Addr())))
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
 	if err != nil {
 		t.Fatal(err)
 	}
