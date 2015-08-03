@@ -238,9 +238,6 @@ func connectSelfLots(n int, t testing.TB) {
 		case err := <-dialErr:
 			t.Fatal(err)
 		}
-		if testing.Verbose() {
-			log.Printf("%x", len(conns))
-		}
 	}
 	for _, c := range conns {
 		if c != nil {
@@ -249,14 +246,6 @@ func connectSelfLots(n int, t testing.TB) {
 	}
 	s.mu.Lock()
 	for len(s.conns) != 0 {
-		if testing.Verbose() {
-			log.Printf("socket conns: %d", len(s.conns))
-			if len(s.conns) < 10 {
-				for _, c := range s.conns {
-					log.Printf("%#v", c)
-				}
-			}
-		}
 		s.event.Wait()
 	}
 	s.mu.Unlock()
