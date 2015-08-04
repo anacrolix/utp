@@ -404,14 +404,14 @@ func (c *Conn) connected() bool {
 
 // addr is used to create a listening UDP conn which becomes the underlying
 // net.PacketConn for the Socket.
-func NewSocket(addr string) (s *Socket, err error) {
+func NewSocket(network, addr string) (s *Socket, err error) {
 	s = &Socket{
 		backlog: make(map[syn]struct{}, backlog),
 		reads:   make(chan read, 1),
 		closing: make(chan struct{}),
 	}
 	s.event.L = &s.mu
-	s.pc, err = net.ListenPacket("udp", addr)
+	s.pc, err = net.ListenPacket(network, addr)
 	if err != nil {
 		return
 	}
@@ -576,7 +576,7 @@ func Dial(addr string) (net.Conn, error) {
 
 // Same as Dial with a timeout parameter.
 func DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
-	s, err := NewSocket(":0")
+	s, err := NewSocket("udp", ":0")
 	if err != nil {
 		return
 	}

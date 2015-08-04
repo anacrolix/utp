@@ -23,7 +23,7 @@ func main() {
 		err  error
 	)
 	if *listen {
-		s, err := utp.NewSocket(fmt.Sprintf(":%d", *port))
+		s, err := utp.NewSocket("udp", fmt.Sprintf(":%d", *port))
 		if err != nil {
 			log.Fatal(err)
 		}

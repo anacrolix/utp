@@ -18,7 +18,7 @@ func init() {
 }
 
 func TestUTPPingPong(t *testing.T) {
-	s, err := NewSocket("localhost:0")
+	s, err := NewSocket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestUTPPingPong(t *testing.T) {
 }
 
 func TestDialTimeout(t *testing.T) {
-	s, _ := NewSocket("localhost:0")
+	s, _ := NewSocket("udp", "localhost:0")
 	defer s.Close()
 	conn, err := DialTimeout(s.Addr().String(), 10*time.Millisecond)
 	if err == nil {
@@ -87,7 +87,7 @@ func TestMinMaxHeaderType(t *testing.T) {
 }
 
 func TestUTPRawConn(t *testing.T) {
-	l, err := NewSocket("")
+	l, err := NewSocket("udp", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestUTPRawConn(t *testing.T) {
 	// Connect a UTP peer to see if the RawConn will still work.
 	log.Print("dialing")
 	utpPeer, err := func() *Socket {
-		s, _ := NewSocket("")
+		s, _ := NewSocket("udp", "")
 		return s
 	}().Dial(fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
 	log.Print("dial returned")
@@ -159,8 +159,8 @@ func TestUTPRawConn(t *testing.T) {
 }
 
 func TestConnReadDeadline(t *testing.T) {
-	ls, _ := NewSocket("localhost:0")
-	ds, _ := NewSocket("localhost:0")
+	ls, _ := NewSocket("udp", "localhost:0")
+	ds, _ := NewSocket("udp", "localhost:0")
 	dcReadErr := make(chan error)
 	go func() {
 		c, _ := ds.Dial(ls.Addr().String())
@@ -205,7 +205,7 @@ func TestConnReadDeadline(t *testing.T) {
 }
 
 func connectSelfLots(n int, t testing.TB) {
-	s, err := NewSocket("127.0.0.1:0")
+	s, err := NewSocket("udp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +268,7 @@ func BenchmarkConnectSelf(b *testing.B) {
 
 func BenchmarkNewCloseSocket(b *testing.B) {
 	for range iter.N(b.N) {
-		s, err := NewSocket("localhost:0")
+		s, err := NewSocket("udp", "localhost:0")
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -280,7 +280,7 @@ func BenchmarkNewCloseSocket(b *testing.B) {
 }
 
 func TestRejectDialBacklogFilled(t *testing.T) {
-	s, err := NewSocket("localhost:0")
+	s, err := NewSocket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
