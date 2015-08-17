@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/anacrolix/jitter"
+	"github.com/anacrolix/missinggo"
 	"github.com/spacemonkeygo/monotime"
 )
 
@@ -1015,7 +1016,11 @@ func (c *Conn) deliver(h header, payload []byte) {
 	// 64 should correspond to 8 bytes of selective ack.
 	if inboundIndex >= maxUnackedInbound {
 		// Discard packet too far ahead.
-		log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
+		if missinggo.CryHeard() {
+			// I can't tell if this occurs due to bad peers, or something
+			// missing in the implementation.
+			log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
+		}
 		return
 	}
 	// Extend inbound so the new packet has a place.
