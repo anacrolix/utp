@@ -27,7 +27,6 @@ import (
 
 	"github.com/anacrolix/jitter"
 	"github.com/anacrolix/missinggo"
-	"github.com/spacemonkeygo/monotime"
 )
 
 const (
@@ -714,7 +713,7 @@ func (c *Conn) wndSize() uint32 {
 }
 
 func nowTimestamp() uint32 {
-	return uint32(monotime.Monotonic() / time.Microsecond)
+	return uint32(time.Now().UnixNano() / int64(time.Microsecond))
 }
 
 // Send the given payload with an up to date header.
