@@ -220,9 +220,12 @@ func connectSelfLots(n int, t testing.TB) {
 	}()
 	dialErr := make(chan error)
 	connCh := make(chan net.Conn)
+	dialSema := make(chan struct{}, backlog)
 	for range iter.N(n) {
 		go func() {
+			dialSema <- struct{}{}
 			c, err := s.Dial(s.Addr().String())
+			<-dialSema
 			if err != nil {
 				dialErr <- err
 				return
@@ -257,7 +260,7 @@ func TestConnectSelf(t *testing.T) {
 	// A rough guess says that at worst, I can only have 0x10000/3 connections
 	// to the same socket, due to fragmentation in the assigned connection
 	// IDs.
-	connectSelfLots(0x100, t)
+	connectSelfLots(0x1000, t)
 }
 
 func BenchmarkConnectSelf(b *testing.B) {
