@@ -495,67 +495,71 @@ func (s *Socket) dispatcher() {
 			s.unusedRead(read)
 			continue
 		}
-		b := read.data
-		addr := read.from
-		var h header
-		hEnd, err := h.Unmarshal(b)
-		if logLevel >= 1 {
-			log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:]))
+		go s.dispatch(read)
+	}
+}
+
+func (s *Socket) dispatch(read read) {
+	b := read.data
+	addr := read.from
+	var h header
+	hEnd, err := h.Unmarshal(b)
+	if logLevel >= 1 {
+		log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:]))
+	}
+	if err != nil || h.Type > stMax || h.Version != 1 {
+		s.unusedRead(read)
+		return
+	}
+	s.mu.Lock()
+	c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
+		recvID = h.ConnID
+		// If a SYN is resent, its connection ID field will be one lower
+		// than we expect.
+		if h.Type == stSyn {
+			recvID++
 		}
-		if err != nil || h.Type > stMax || h.Version != 1 {
-			s.unusedRead(read)
-			continue
+		return
+	}()}]
+	s.mu.Unlock()
+	if ok {
+		if h.Type == stSyn {
+			if h.ConnID == c.send_id-2 {
+				// This is a SYN for connection that cannot exist locally. The
+				// connection the remote wants to establish here with the proposed
+				// recv_id, already has an existing connection that was dialled
+				// *out* from this socket, which is why the send_id is 1 higher,
+				// rather than 1 lower than the recv_id.
+				log.Print("resetting conflicting syn")
+				s.reset(addr, h.SeqNr, h.ConnID)
+				return
+			} else if h.ConnID != c.send_id {
+				panic("bad assumption")
+			}
+		}
+		c.deliver(h, b[hEnd:])
+		return
+	}
+	if h.Type == stSyn {
+		if logLevel >= 1 {
+			log.Printf("adding SYN to backlog")
+		}
+		syn := syn{
+			seq_nr:  h.SeqNr,
+			conn_id: h.ConnID,
+			addr:    addr.String(),
 		}
 		s.mu.Lock()
-		c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
-			recvID = h.ConnID
-			// If a SYN is resent, its connection ID field will be one lower
-			// than we expect.
-			if h.Type == stSyn {
-				recvID++
-			}
-			return
-		}()}]
+		s.pushBacklog(syn)
 		s.mu.Unlock()
-		if ok {
-			if h.Type == stSyn {
-				if h.ConnID == c.send_id-2 {
-					// This is a SYN for connection that cannot exist locally. The
-					// connection the remote wants to establish here with the proposed
-					// recv_id, already has an existing connection that was dialled
-					// *out* from this socket, which is why the send_id is 1 higher,
-					// rather than 1 lower than the recv_id.
-					log.Print("resetting conflicting syn")
-					s.reset(addr, h.SeqNr, h.ConnID)
-					continue
-				} else if h.ConnID != c.send_id {
-					panic("bad assumption")
-				}
-			}
-			c.deliver(h, b[hEnd:])
-			continue
-		}
-		if h.Type == stSyn {
-			if logLevel >= 1 {
-				log.Printf("adding SYN to backlog")
-			}
-			syn := syn{
-				seq_nr:  h.SeqNr,
-				conn_id: h.ConnID,
-				addr:    addr.String(),
-			}
-			s.mu.Lock()
-			s.pushBacklog(syn)
-			s.mu.Unlock()
-			continue
-		} else if h.Type != stReset {
-			// This is an unexpected packet. We'll send a reset, but also pass
-			// it on.
-			// log.Print("resetting unexpected packet")
-			// s.reset(addr, h.SeqNr, h.ConnID)
-		}
-		s.unusedRead(read)
+		return
+	} else if h.Type != stReset {
+		// This is an unexpected packet. We'll send a reset, but also pass
+		// it on.
+		// log.Print("resetting unexpected packet")
+		// s.reset(addr, h.SeqNr, h.ConnID)
 	}
+	s.unusedRead(read)
 }
 
 // Send a reset in response to a packet with the given header.
