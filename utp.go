@@ -486,11 +486,7 @@ func (s *Socket) pushBacklog(syn syn) {
 }
 
 func (s *Socket) dispatcher() {
-	for {
-		read, ok := <-s.reads
-		if !ok {
-			return
-		}
+	for read := range s.reads {
 		if len(read.data) < 20 {
 			s.unusedRead(read)
 			continue
