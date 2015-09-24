@@ -27,28 +27,32 @@ function other_ucat() {
 # Check what the correct result is.
 md5 "$1"
 
+rate() {
+	pv -a -W
+}
+
 echo 'utp->other_ucat'
 # Send from this uTP implementation to another client.
-other_ucat -l | pv | md5 &
+other_ucat -l | rate | md5 &
 # sleep 1
 godo ${GODOFLAGS-} ./cmd/ucat  localhost 4000 < "$1"
 wait
 
 echo 'other_ucat->utp'
 # Send from the other implementation, to this one.
-GO_UTP_LOGGING=0 GOPPROF=cpu godo ${GODOFLAGS-} ./cmd/ucat -l -p 4000 | pv | md5 &
+GO_UTP_LOGGING=0 GOPPROF= godo ${GODOFLAGS-} ./cmd/ucat -l -p 4000 | rate | md5 &
 # Never receive from h2so5's ucat without a small sleep first. Don't know why.
 # sleep 1
 other_ucat < "$1"
 wait
 
 echo 'libutp->libutp'
-libutp-ucat -l -p 4000 | pv | md5 &
+libutp-ucat -l -p 4000 | rate | md5 &
 libutp-ucat localhost 4000 < "$1"
 wait
 
 echo 'utp->utp'
-godo ./cmd/ucat -l -p 4000 | pv | md5 &
+godo ./cmd/ucat -l -p 4000 | rate | md5 &
 godo ./cmd/ucat localhost 4000 < "$1"
 wait
 
