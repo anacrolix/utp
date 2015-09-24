@@ -125,7 +125,7 @@ type connKey struct {
 // A Socket wraps a net.PacketConn, diverting uTP packets to its child uTP
 // Conns.
 type Socket struct {
-	mu      sync.Mutex
+	mu      sync.RWMutex
 	event   sync.Cond
 	pc      net.PacketConn
 	conns   map[connKey]*Conn
@@ -511,7 +511,7 @@ func (s *Socket) dispatch(read read) {
 		s.unusedRead(read)
 		return
 	}
-	s.mu.Lock()
+	s.mu.RLock()
 	c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
 		recvID = h.ConnID
 		// If a SYN is resent, its connection ID field will be one lower
@@ -521,7 +521,7 @@ func (s *Socket) dispatch(read read) {
 		}
 		return
 	}()}]
-	s.mu.Unlock()
+	s.mu.RUnlock()
 	if ok {
 		if h.Type == stSyn {
 			if h.ConnID == c.send_id-2 {
