@@ -553,6 +553,7 @@ func (s *Socket) dispatch(read read) {
 		// This is an unexpected packet. We'll send a reset, but also pass
 		// it on.
 		// log.Print("resetting unexpected packet")
+		// I don't think you can reset on the received packets ConnID if it isn't a SYN, as the send_id will differ in this case.
 		// s.reset(addr, h.SeqNr, h.ConnID)
 	}
 	s.unusedRead(read)
@@ -804,7 +805,9 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 	// State messages aren't acknowledged, so there's nothing to resend.
 	if _type != stState {
 		// Copy payload so caller to write can continue to use the buffer.
-		payload = append(sendBufferPool.Get().([]byte)[:0:minMTU], payload...)
+		if payload != nil {
+			payload = append(sendBufferPool.Get().([]byte)[:0:minMTU], payload...)
+		}
 		send := &send{
 			acked:       make(chan struct{}),
 			payloadSize: uint32(len(payload)),
@@ -1177,15 +1180,12 @@ func (s *Socket) Close() (err error) {
 	return
 }
 
-// TODO: Currently does nothing. Should probably "close" the packet connection
-// to adher to the net.PacketConn protocol.
 func (me *packetConn) Close() (err error) {
 	me.mu.Lock()
 	defer me.mu.Unlock()
-	if me.closed {
-		return
+	if !me.closed {
+		close(me.unusedReads)
 	}
-	close(me.unusedReads)
 	me.closed = true
 	return
 }

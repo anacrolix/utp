@@ -11,6 +11,7 @@ import (
 	_ "github.com/anacrolix/envpprof"
 	"github.com/anacrolix/missinggo"
 	"github.com/bradfitz/iter"
+	"github.com/stretchr/testify/require"
 )
 
 func init() {
@@ -19,9 +20,7 @@ func init() {
 
 func TestUTPPingPong(t *testing.T) {
 	s, err := NewSocket("udp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	pingerClosed := make(chan struct{})
 	go func() {
 		defer close(pingerClosed)
@@ -51,20 +50,12 @@ func TestUTPPingPong(t *testing.T) {
 	log.Printf("accepted %s", a)
 	buf := make([]byte, 42)
 	n, err := a.Read(buf)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(buf[:n]) != "ping" {
-		t.Fatalf("didn't get ping, got %q", buf[:n])
-	}
+	require.NoError(t, err)
+	require.EqualValues(t, "ping", buf[:n])
 	log.Print("got ping")
 	n, err = a.Write([]byte("pong"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 4 {
-		panic(n)
-	}
+	require.NoError(t, err)
+	require.Equal(t, 4, n)
 	log.Print("waiting for pinger to close")
 	<-pingerClosed
 }
