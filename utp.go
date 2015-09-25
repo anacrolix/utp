@@ -1209,7 +1209,7 @@ func (s *packetConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 
 func (c *Conn) finish() {
-	if c.cs != csConnected {
+	if c.cs == csSentFin {
 		return
 	}
 	finSeqNr := c.seq_nr
