@@ -814,7 +814,10 @@ func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n 
 			started:     time.Now(),
 			resend: func() {
 				c.mu.Lock()
-				c.send(_type, connID, payload, seqNr)
+				err := c.send(_type, connID, payload, seqNr)
+				if err != nil {
+					log.Printf("error resending packet: %s", err)
+				}
 				c.mu.Unlock()
 			},
 			timedOut: func() {
