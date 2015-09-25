@@ -3,8 +3,10 @@ package utp
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -321,4 +323,46 @@ func TestResetAfterFuncTimer(t *testing.T) {
 		t.FailNow()
 	}
 	<-fired
+}
+
+func connPair() (initer, accepted net.Conn) {
+	s, err := NewSocket("udp", "localhost:0")
+	if err != nil {
+		panic(err)
+	}
+	defer s.Close()
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var err error
+		initer, err = Dial(s.Addr().String())
+		if err != nil {
+			panic(err)
+		}
+	}()
+	accepted, err = s.Accept()
+	if err != nil {
+		panic(err)
+	}
+	wg.Wait()
+	return
+}
+
+// Check that peer sending FIN doesn't cause unread data to be dropped in a
+// receiver.
+func TestReadFinishedConn(t *testing.T) {
+	a, b := connPair()
+	defer a.Close()
+	defer b.Close()
+	n, err := a.Write([]byte("hello"))
+	require.Equal(t, 5, n)
+	require.NoError(t, err)
+	n, err = a.Write([]byte("world"))
+	require.Equal(t, 5, n)
+	require.NoError(t, err)
+	a.Close()
+	all, err := ioutil.ReadAll(b)
+	require.NoError(t, err)
+	require.EqualValues(t, "helloworld", all)
 }

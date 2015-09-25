@@ -1174,8 +1174,16 @@ func (s *Socket) Close() (err error) {
 	default:
 	}
 	close(s.closing)
+	go func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		for len(s.conns) != 0 {
+			s.event.Wait()
+		}
+		s.pc.Close()
+		s.event.Broadcast()
+	}()
 	s.raw.Close()
-	s.pc.Close()
 	s.event.Broadcast()
 	return
 }
