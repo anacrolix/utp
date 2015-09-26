@@ -384,6 +384,7 @@ func (s *send) Ack() {
 type recv struct {
 	seen bool
 	data []byte
+	Type int
 }
 
 var (
@@ -993,6 +994,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 	} else {
 		c.lastTimeDiff = c.timestamp() - h.Timestamp
 	}
+	if c.cs == csSentFin && len(c.unackedSends) == 0 {
+		c.destroy(nil)
+	}
 	// log.Printf("now micros: %d, header timestamp: %d, header diff: %d", c.timestamp(), h.Timestamp, h.TimestampDiff)
 	if h.Type == stReset {
 		c.destroy(errors.New("peer reset"))
@@ -1040,22 +1044,18 @@ func (c *Conn) deliver(h header, payload []byte) {
 	if inboundIndex != 0 {
 		// log.Printf("packet out of order, index=%d", inboundIndex)
 	}
-	c.inbound[inboundIndex] = recv{true, payload}
+	c.inbound[inboundIndex] = recv{true, payload, h.Type}
 	// Consume consecutive next packets.
 	for len(c.inbound) > 0 && c.inbound[0].seen {
 		c.ack_nr++
-		c.readBuf = append(c.readBuf, c.inbound[0].data...)
+		p := c.inbound[0]
 		c.inbound = c.inbound[1:]
-	}
-	c.sendState()
-	if c.cs == csSentFin {
-		if !seqLess(h.AckNr, c.seq_nr-1) {
+		c.readBuf = append(c.readBuf, p.data...)
+		if p.Type == stFin {
 			c.destroy(nil)
 		}
 	}
-	if h.Type == stFin {
-		c.destroy(nil)
-	}
+	c.sendState()
 }
 
 func (c *Conn) waitAck(seq uint16) {
@@ -1235,12 +1235,7 @@ func (c *Conn) finish() {
 	}
 	c.seq_nr++ // Spec says set to "eof_pkt".
 	c.cs = csSentFin
-	go func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		c.waitAck(finSeqNr)
-		c.destroy(nil)
-	}()
+	c.event.Broadcast()
 }
 
 func (c *Conn) destroy(reason error) {
@@ -1277,7 +1272,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		if len(c.readBuf) != 0 {
 			break
 		}
-		if c.cs == csDestroy || c.cs == csGotFin {
+		if c.cs == csDestroy || c.cs == csSentFin {
 			err = c.err
 			if err == nil {
 				err = io.EOF
