@@ -985,33 +985,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.event.Broadcast()
-	if h.Type == stSyn {
-		if h.ConnID != c.send_id {
-			panic(fmt.Sprintf("%d != %d", h.ConnID, c.send_id))
-		}
-	} else {
-		if h.ConnID != c.recv_id {
-			panic("erroneous delivery")
-		}
-	}
+	c.assertHeader(h)
 	c.peerWndSize = h.WndSize
-	c.ackTo(h.AckNr)
-	for _, ext := range h.Extensions {
-		switch ext.Type {
-		case extensionTypeSelectiveAck:
-			c.ackSkipped(h.AckNr + 1)
-			bitmask := selectiveAckBitmask(ext.Bytes)
-			for i := 0; i < bitmask.NumBits(); i++ {
-				if bitmask.BitIsSet(i) {
-					nr := h.AckNr + 2 + uint16(i)
-					// log.Printf("selectively acked %d", nr)
-					c.ack(nr)
-				} else {
-					c.ackSkipped(h.AckNr + 2 + uint16(i))
-				}
-			}
-		}
-	}
+	c.applyAcks(h)
 	if h.Timestamp == 0 {
 		c.lastTimeDiff = 0
 	} else {
@@ -1068,6 +1044,43 @@ func (c *Conn) deliver(h header, payload []byte) {
 		// log.Printf("packet out of order, index=%d", inboundIndex)
 	}
 	c.inbound[inboundIndex] = recv{true, payload, h.Type}
+	c.processInbound()
+	c.sendState()
+}
+
+func (c *Conn) applyAcks(h header) {
+	c.ackTo(h.AckNr)
+	for _, ext := range h.Extensions {
+		switch ext.Type {
+		case extensionTypeSelectiveAck:
+			c.ackSkipped(h.AckNr + 1)
+			bitmask := selectiveAckBitmask(ext.Bytes)
+			for i := 0; i < bitmask.NumBits(); i++ {
+				if bitmask.BitIsSet(i) {
+					nr := h.AckNr + 2 + uint16(i)
+					// log.Printf("selectively acked %d", nr)
+					c.ack(nr)
+				} else {
+					c.ackSkipped(h.AckNr + 2 + uint16(i))
+				}
+			}
+		}
+	}
+}
+
+func (c *Conn) assertHeader(h header) {
+	if h.Type == stSyn {
+		if h.ConnID != c.send_id {
+			panic(fmt.Sprintf("%d != %d", h.ConnID, c.send_id))
+		}
+	} else {
+		if h.ConnID != c.recv_id {
+			panic("erroneous delivery")
+		}
+	}
+}
+
+func (c *Conn) processInbound() {
 	// Consume consecutive next packets.
 	for len(c.inbound) > 0 && c.inbound[0].seen {
 		c.ack_nr++
@@ -1078,7 +1091,6 @@ func (c *Conn) deliver(h header, payload []byte) {
 			c.destroy(nil)
 		}
 	}
-	c.sendState()
 }
 
 func (c *Conn) waitAck(seq uint16) {
