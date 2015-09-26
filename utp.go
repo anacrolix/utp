@@ -188,6 +188,7 @@ type header struct {
 }
 
 var (
+	mu                         sync.RWMutex
 	logLevel                   = 0
 	artificialPacketDropChance = 0.0
 )
@@ -764,8 +765,11 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 }
 
 func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
-	if artificialPacketDropChance != 0 {
-		if rand.Float64() < artificialPacketDropChance {
+	mu.RLock()
+	apdc := artificialPacketDropChance
+	mu.RUnlock()
+	if apdc != 0 {
+		if rand.Float64() < apdc {
 			n = len(b)
 			return
 		}

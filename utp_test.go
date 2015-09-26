@@ -347,14 +347,18 @@ func TestReadFinishedConn(t *testing.T) {
 	a, b := connPair()
 	defer a.Close()
 	defer b.Close()
+	mu.Lock()
 	artificialPacketDropChance = 1
+	mu.Unlock()
 	n, err := a.Write([]byte("hello"))
 	require.Equal(t, 5, n)
 	require.NoError(t, err)
 	n, err = a.Write([]byte("world"))
 	require.Equal(t, 5, n)
 	require.NoError(t, err)
+	mu.Lock()
 	artificialPacketDropChance = 0
+	mu.Unlock()
 	a.Close()
 	all, err := ioutil.ReadAll(b)
 	require.NoError(t, err)
