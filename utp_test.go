@@ -27,22 +27,14 @@ func TestUTPPingPong(t *testing.T) {
 	go func() {
 		defer close(pingerClosed)
 		b, err := Dial(s.Addr().String())
-		if err != nil {
-			t.Fatal(err)
-		}
+		require.NoError(t, err)
 		defer b.Close()
 		n, err := b.Write([]byte("ping"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if n != 4 {
-			panic(n)
-		}
+		require.NoError(t, err)
+		require.EqualValues(t, 4, n)
 		buf := make([]byte, 4)
 		b.Read(buf)
-		if string(buf) != "pong" {
-			t.Fatal("expected pong")
-		}
+		require.EqualValues(t, "pong", buf)
 		log.Printf("got pong")
 	}()
 	a, err := s.Accept()
