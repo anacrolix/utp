@@ -744,7 +744,6 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 		}},
 	}
 	p := h.Marshal()
-	sendBufferPool.Put(p)
 	// Extension headers are currently fixed in size.
 	if len(p) != maxHeaderSize {
 		panic("header has unexpected size")
