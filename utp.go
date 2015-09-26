@@ -336,7 +336,7 @@ type Conn struct {
 
 	readBuf []byte
 
-	socket     net.PacketConn
+	socket     *Socket
 	remoteAddr net.Addr
 	// The uTP timestamp.
 	startTimestamp uint32
@@ -561,7 +561,7 @@ func (s *Socket) dispatch(read read) {
 
 // Send a reset in response to a packet with the given header.
 func (s *Socket) reset(addr net.Addr, ackNr, connId uint16) {
-	go s.pc.WriteTo((&header{
+	go s.writeTo((&header{
 		Type:    stReset,
 		Version: 1,
 		ConnID:  connId,
@@ -629,7 +629,7 @@ func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
-		socket:         s.pc,
+		socket:         s,
 		remoteAddr:     addr,
 		startTimestamp: nowTimestamp(),
 		created:        time.Now(),
@@ -748,22 +748,28 @@ func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err
 	if len(p) != maxHeaderSize {
 		panic("header has unexpected size")
 	}
-	if artificialPacketDropChance != 0 {
-		if rand.Float64() < artificialPacketDropChance {
-			return nil
-		}
-	}
 	p = append(p, payload...)
 	if logLevel >= 1 {
 		log.Printf("writing utp msg to %s: %s", c.remoteAddr, packetDebugString(&h, payload))
 	}
-	n1, err := c.socket.WriteTo(p, c.remoteAddr)
+	n1, err := c.socket.writeTo(p, c.remoteAddr)
 	if err != nil {
 		return
 	}
 	if n1 != len(p) {
 		panic(n1)
 	}
+	return
+}
+
+func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
+	if artificialPacketDropChance != 0 {
+		if rand.Float64() < artificialPacketDropChance {
+			n = len(b)
+			return
+		}
+	}
+	n, err = me.pc.WriteTo(b, addr)
 	return
 }
 
@@ -1261,7 +1267,7 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) LocalAddr() net.Addr {
-	return c.socket.LocalAddr()
+	return c.socket.Addr()
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
