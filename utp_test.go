@@ -157,18 +157,14 @@ func TestConnReadDeadline(t *testing.T) {
 	dl := time.Now().Add(time.Millisecond)
 	c.SetReadDeadline(dl)
 	_, err := c.Read(nil)
-	if !err.(net.Error).Timeout() {
-		t.FailNow()
-	}
+	require.Equal(t, errTimeout, err)
 	// The deadline has passed.
 	if !time.Now().After(dl) {
 		t.FailNow()
 	}
 	// Returns timeout on subsequent read.
 	_, err = c.Read(nil)
-	if !err.(net.Error).Timeout() {
-		t.FailNow()
-	}
+	require.Equal(t, errTimeout, err)
 	// Disable the deadline.
 	c.SetReadDeadline(time.Time{})
 	readReturned := make(chan struct{})
@@ -183,14 +179,18 @@ func TestConnReadDeadline(t *testing.T) {
 	case <-time.After(time.Millisecond):
 	}
 	c.Close()
-	<-readReturned
+	select {
+	case <-readReturned:
+	case <-time.After(time.Millisecond):
+		t.Fatal("read should return after Conn is closed")
+	}
 	if err := <-dcReadErr; err != io.EOF {
 		t.Fatalf("dial conn read returned %s", err)
 	}
 }
 
 func connectSelfLots(n int, t testing.TB) {
-	s, err := NewSocket("udp", "127.0.0.1:0")
+	s, err := NewSocket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,12 +347,14 @@ func TestReadFinishedConn(t *testing.T) {
 	a, b := connPair()
 	defer a.Close()
 	defer b.Close()
+	artificialPacketDropChance = 1
 	n, err := a.Write([]byte("hello"))
 	require.Equal(t, 5, n)
 	require.NoError(t, err)
 	n, err = a.Write([]byte("world"))
 	require.Equal(t, 5, n)
 	require.NoError(t, err)
+	artificialPacketDropChance = 0
 	a.Close()
 	all, err := ioutil.ReadAll(b)
 	require.NoError(t, err)
