@@ -312,11 +312,11 @@ const (
 )
 
 const (
-	stData = iota
-	stFin
-	stState
-	stReset
-	stSyn
+	stData  = 0
+	stFin   = 1
+	stState = 2
+	stReset = 3
+	stSyn   = 4
 
 	// Used for validating packet headers.
 	stMax = stSyn
