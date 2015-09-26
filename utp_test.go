@@ -364,3 +364,23 @@ func TestReadFinishedConn(t *testing.T) {
 	require.NoError(t, err)
 	require.EqualValues(t, "helloworld", all)
 }
+
+func TestCloseDetachesQuickly(t *testing.T) {
+	s, _ := NewSocket("udp", "localhost:0")
+	defer s.Close()
+	go func() {
+		a, _ := s.Dial(s.Addr().String())
+		log.Print("close a")
+		a.Close()
+		log.Print("closed a")
+	}()
+	b, _ := s.Accept()
+	b.Close()
+	s.mu.Lock()
+	for len(s.conns) != 0 {
+		log.Print(len(s.conns))
+		s.event.Wait()
+	}
+	s.mu.Unlock()
+
+}
