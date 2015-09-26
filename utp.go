@@ -176,7 +176,7 @@ type extensionField struct {
 }
 
 type header struct {
-	Type          int
+	Type          st
 	Version       int
 	ConnID        uint16
 	Timestamp     uint32
@@ -241,7 +241,7 @@ func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err 
 var errInvalidHeader = errors.New("invalid header")
 
 func (h *header) Unmarshal(b []byte) (n int, err error) {
-	h.Type = int(b[0] >> 4)
+	h.Type = st(b[0] >> 4)
 	h.Version = int(b[0] & 0xf)
 	if h.Type > stMax || h.Version != 1 {
 		err = errInvalidHeader
@@ -312,12 +312,31 @@ const (
 	csDestroy
 )
 
+type st int
+
+func (me st) String() string {
+	switch me {
+	case stData:
+		return "stData"
+	case stFin:
+		return "stFin"
+	case stState:
+		return "stState"
+	case stReset:
+		return "stReset"
+	case stSyn:
+		return "stSyn"
+	default:
+		panic(fmt.Sprintf("%d", me))
+	}
+}
+
 const (
-	stData  = 0
-	stFin   = 1
-	stState = 2
-	stReset = 3
-	stSyn   = 4
+	stData  st = 0
+	stFin      = 1
+	stState    = 2
+	stReset    = 3
+	stSyn      = 4
 
 	// Used for validating packet headers.
 	stMax = stSyn
@@ -385,7 +404,7 @@ func (s *send) Ack() {
 type recv struct {
 	seen bool
 	data []byte
-	Type int
+	Type st
 }
 
 var (
@@ -425,7 +444,7 @@ func NewSocket(network, addr string) (s *Socket, err error) {
 }
 
 func packetDebugString(h *header, payload []byte) string {
-	return fmt.Sprintf("%#v: %q", h, payload)
+	return fmt.Sprintf("%s->%d: %q", h.Type, h.ConnID, payload)
 }
 
 func (s *Socket) reader() {
@@ -720,7 +739,7 @@ func nowTimestamp() uint32 {
 }
 
 // Send the given payload with an up to date header.
-func (c *Conn) send(_type int, connID uint16, payload []byte, seqNr uint16) (err error) {
+func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err error) {
 	selAck := selectiveAckBitmask(make([]byte, 8))
 	for i := 1; i < 65; i++ {
 		if len(c.inbound) <= i {
@@ -799,7 +818,7 @@ func (s *send) timeoutResend() {
 	s.mu.Unlock()
 }
 
-func (c *Conn) write(_type int, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
+func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
 	if c.cs == csDestroy {
 		err = errors.New("conn being destroyed")
 		return
