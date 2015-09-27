@@ -48,6 +48,10 @@ const (
 
 	// Maximum out-of-order packets to buffer.
 	maxUnackedInbound = 64
+
+	// If an send isn't acknowledged after this period, its connection is
+	// destroyed. There are resends during this period.
+	sendTimeout = 15 * time.Second
 )
 
 var (
@@ -807,7 +811,7 @@ func (s *send) timeoutResend() {
 		return
 	default:
 	}
-	if time.Since(s.started) >= 15*time.Second {
+	if time.Since(s.started) >= sendTimeout {
 		s.timedOut()
 		return
 	}
