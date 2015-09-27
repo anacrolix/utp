@@ -993,8 +993,14 @@ func (c *Conn) deliver(h header, payload []byte) {
 	} else {
 		c.lastTimeDiff = c.timestamp() - h.Timestamp
 	}
+
+	// log.Println(c.cs, len(c.unackedSends))
 	if c.cs == csSentFin && len(c.unackedSends) == 0 {
 		c.destroy(nil)
+		return
+	}
+	if c.cs == csConnected && h.Type == stFin {
+		c.changeState(csGotFin)
 	}
 	// log.Printf("now micros: %d, header timestamp: %d, header diff: %d", c.timestamp(), h.Timestamp, h.TimestampDiff)
 	if h.Type == stReset {
@@ -1005,7 +1011,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 		if h.Type != stState {
 			return
 		}
-		c.cs = csConnected
+		c.changeState(csConnected)
 		c.ack_nr = h.SeqNr - 1
 		return
 	}
@@ -1088,7 +1094,8 @@ func (c *Conn) processInbound() {
 		c.inbound = c.inbound[1:]
 		c.readBuf = append(c.readBuf, p.data...)
 		if p.Type == stFin {
-			c.destroy(nil)
+			c.finish()
+			break
 		}
 	}
 }
@@ -1104,6 +1111,11 @@ func (c *Conn) waitAck(seq uint16) {
 	return
 }
 
+func (c *Conn) changeState(cs int) {
+	// log.Println(c, "goes", c.cs, "->", cs)
+	c.cs = cs
+}
+
 func (c *Conn) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -1112,7 +1124,7 @@ func (c *Conn) connect() error {
 	if err != nil {
 		return err
 	}
-	c.cs = csSynSent
+	c.changeState(csSynSent)
 	if logLevel >= 2 {
 		log.Printf("sent syn")
 	}
@@ -1141,6 +1153,7 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 		if s.conns[key] != c {
 			panic("conn changed")
 		}
+		// log.Println("detached", key)
 		delete(s.conns, key)
 		s.event.Broadcast()
 	}
@@ -1263,14 +1276,18 @@ func (c *Conn) finish() {
 	if c.cs == csSentFin {
 		return
 	}
+	defer c.event.Broadcast()
 	finSeqNr := c.seq_nr
 	if _, err := c.write(stFin, c.send_id, nil, finSeqNr); err != nil {
 		c.destroy(fmt.Errorf("error sending FIN: %s", err))
 		return
 	}
+	if c.cs == csGotFin {
+		c.destroy(nil)
+		return
+	}
 	c.seq_nr++ // Spec says set to "eof_pkt".
-	c.cs = csSentFin
-	c.event.Broadcast()
+	c.changeState(csSentFin)
 }
 
 func (c *Conn) destroy(reason error) {
@@ -1280,7 +1297,7 @@ func (c *Conn) destroy(reason error) {
 	if c.cs == csDestroy {
 		return
 	}
-	c.cs = csDestroy
+	c.changeState(csDestroy)
 	c.err = reason
 	c.event.Broadcast()
 	c.detach()
@@ -1335,7 +1352,7 @@ func (c *Conn) RemoteAddr() net.Addr {
 }
 
 func (c *Conn) String() string {
-	return fmt.Sprintf("<UTPConn %s-%s>", c.LocalAddr(), c.RemoteAddr())
+	return fmt.Sprintf("<UTPConn %s-%s (%d)>", c.LocalAddr(), c.RemoteAddr(), c.recv_id)
 }
 
 func (c *Conn) Write(p []byte) (n int, err error) {
