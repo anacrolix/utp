@@ -10,7 +10,9 @@ set -eu
 
 # Passed to invocations of godo for package ./cmd/ucat.
 #GODOFLAGS=-race
+
 #export GO_UTP_PACKET_DROP=0.1
+export GOPPROF=
 
 # Invokes the implementation to test against. If there's an arg, then it's
 # expected to listen.
