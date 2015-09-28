@@ -348,6 +348,7 @@ func TestReadFinishedConn(t *testing.T) {
 	defer a.Close()
 	defer b.Close()
 	mu.Lock()
+	originalAPDC := artificialPacketDropChance
 	artificialPacketDropChance = 1
 	mu.Unlock()
 	n, err := a.Write([]byte("hello"))
@@ -357,7 +358,7 @@ func TestReadFinishedConn(t *testing.T) {
 	require.Equal(t, 5, n)
 	require.NoError(t, err)
 	mu.Lock()
-	artificialPacketDropChance = 0
+	artificialPacketDropChance = originalAPDC
 	mu.Unlock()
 	a.Close()
 	all, err := ioutil.ReadAll(b)
