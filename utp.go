@@ -200,7 +200,6 @@ var (
 func init() {
 	logLevel, _ = strconv.Atoi(os.Getenv("GO_UTP_LOGGING"))
 	fmt.Sscanf(os.Getenv("GO_UTP_PACKET_DROP"), "%f", &artificialPacketDropChance)
-
 }
 
 var (
