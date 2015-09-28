@@ -579,7 +579,9 @@ func (s *Socket) dispatch(read read) {
 		// it on.
 		// log.Print("resetting unexpected packet")
 		// I don't think you can reset on the received packets ConnID if it isn't a SYN, as the send_id will differ in this case.
-		// s.reset(addr, h.SeqNr, h.ConnID)
+		s.reset(addr, h.SeqNr, h.ConnID)
+		s.reset(addr, h.SeqNr, h.ConnID-1)
+		s.reset(addr, h.SeqNr, h.ConnID+1)
 	}
 	s.unusedRead(read)
 }
