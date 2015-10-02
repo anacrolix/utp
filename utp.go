@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"os"
@@ -362,6 +363,9 @@ type Conn struct {
 	connDeadlines
 
 	latencies []time.Duration
+
+	pendingSendState bool
+	sendStateTimer   *time.Timer
 }
 
 type send struct {
@@ -645,6 +649,15 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		created:        time.Now(),
 	}
 	c.event.L = &c.mu
+	c.mu.Lock()
+	c.sendStateTimer = time.AfterFunc(math.MaxInt64, func() {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if !c.pendingSendState {
+			return
+		}
+		c.sendState()
+	})
 	c.connDeadlines.read.setCallback(func() {
 		c.mu.Lock()
 		c.event.Broadcast()
@@ -655,6 +668,7 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		c.event.Broadcast()
 		c.mu.Unlock()
 	})
+	c.mu.Unlock()
 	return
 }
 
@@ -771,7 +785,23 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 	if n1 != len(p) {
 		panic(n1)
 	}
+	c.unpendSendState()
 	return
+}
+
+func (me *Conn) unpendSendState() {
+	me.pendingSendState = false
+	me.sendStateTimer.Stop()
+}
+
+func (c *Conn) pendSendState() {
+	if c.pendingSendState {
+		return
+	}
+	c.pendingSendState = true
+	if c.sendStateTimer.Reset(250 * time.Microsecond) {
+		panic("extended send state timer")
+	}
 }
 
 func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
@@ -1051,7 +1081,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 	}
 	if !seqLess(c.ack_nr, h.SeqNr) {
 		if h.Type == stSyn {
-			c.sendState()
+			c.pendSendState()
 		}
 		// Already received this packet.
 		return
@@ -1081,7 +1111,7 @@ func (c *Conn) deliver(h header, payload []byte) {
 	// if h.Type==stFin{
 	// 	c.gotFin
 	c.processInbound()
-	c.sendState()
+	c.pendSendState()
 }
 
 func (c *Conn) applyAcks(h header) {
