@@ -310,8 +310,6 @@ const (
 	csInvalid = iota
 	csSynSent
 	csConnected
-	csGotFin
-	csSentFin
 	csDestroy
 )
 
@@ -369,8 +367,10 @@ type Conn struct {
 	// no more packets will be handled.
 	detach func()
 
-	cs  int
-	err error
+	cs      int
+	gotFin  bool
+	sentFin bool
+	err     error
 
 	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
@@ -823,10 +823,27 @@ func (s *send) timeoutResend() {
 	s.mu.Unlock()
 }
 
+func (me *Conn) writeSyn() (err error) {
+	if me.cs != csInvalid {
+		panic(me.cs)
+	}
+	_, err = me.write(stSyn, me.recv_id, nil, me.seq_nr)
+	return
+}
+
 func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
-	if c.cs == csDestroy {
-		err = errors.New("conn being destroyed")
-		return
+	switch _type {
+	case stSyn, stFin, stData:
+	default:
+		panic(_type)
+	}
+	switch c.cs {
+	case csConnected, csSynSent, csInvalid:
+	default:
+		panic(c.cs)
+	}
+	if c.sentFin {
+		panic(c)
 	}
 	if len(payload) > maxPayloadSize {
 		payload = payload[:maxPayloadSize]
@@ -836,35 +853,33 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 		return
 	}
 	n = len(payload)
-	// State messages aren't acknowledged, so there's nothing to resend.
-	if _type != stState {
-		// Copy payload so caller to write can continue to use the buffer.
-		if payload != nil {
-			payload = append(sendBufferPool.Get().([]byte)[:0:minMTU], payload...)
-		}
-		send := &send{
-			acked:       make(chan struct{}),
-			payloadSize: uint32(len(payload)),
-			started:     time.Now(),
-			resend: func() {
-				c.mu.Lock()
-				err := c.send(_type, connID, payload, seqNr)
-				if err != nil {
-					log.Printf("error resending packet: %s", err)
-				}
-				c.mu.Unlock()
-			},
-			timedOut: func() {
-				c.mu.Lock()
-				c.destroy(errAckTimeout)
-				c.mu.Unlock()
-			},
-		}
-		send.mu.Lock()
-		send.resendTimer = time.AfterFunc(send.resendTimeout(), send.timeoutResend)
-		send.mu.Unlock()
-		c.unackedSends = append(c.unackedSends, send)
+	// Copy payload so caller to write can continue to use the buffer.
+	if payload != nil {
+		payload = append(sendBufferPool.Get().([]byte)[:0:minMTU], payload...)
 	}
+	send := &send{
+		acked:       make(chan struct{}),
+		payloadSize: uint32(len(payload)),
+		started:     time.Now(),
+		resend: func() {
+			c.mu.Lock()
+			err := c.send(_type, connID, payload, seqNr)
+			if err != nil {
+				log.Printf("error resending packet: %s", err)
+			}
+			c.mu.Unlock()
+		},
+		timedOut: func() {
+			c.mu.Lock()
+			c.destroy(errAckTimeout)
+			c.mu.Unlock()
+		},
+	}
+	send.mu.Lock()
+	send.resendTimer = time.AfterFunc(send.resendTimeout(), send.timeoutResend)
+	send.mu.Unlock()
+	c.unackedSends = append(c.unackedSends, send)
+	c.seq_nr++
 	return
 }
 
@@ -891,7 +906,7 @@ func (c *Conn) cur_window() (window uint32) {
 }
 
 func (c *Conn) sendState() {
-	c.write(stState, c.send_id, nil, c.seq_nr)
+	c.send(stState, c.send_id, nil, c.seq_nr)
 }
 
 func seqLess(a, b uint16) bool {
@@ -999,15 +1014,12 @@ func (c *Conn) deliver(h header, payload []byte) {
 		c.lastTimeDiff = c.timestamp() - h.Timestamp
 	}
 
-	// log.Println(c.cs, len(c.unackedSends))
-	if c.cs == csSentFin && len(c.unackedSends) == 0 {
+	// We want this connection destroyed, and our peer has acked everything.
+	if c.sentFin && len(c.unackedSends) == 0 {
+		// log.Print("gracefully completed")
 		c.destroy(nil)
 		return
 	}
-	if c.cs == csConnected && h.Type == stFin {
-		c.changeState(csGotFin)
-	}
-	// log.Printf("now micros: %d, header timestamp: %d, header diff: %d", c.timestamp(), h.Timestamp, h.TimestampDiff)
 	if h.Type == stReset {
 		c.destroy(errors.New("peer reset"))
 		return
@@ -1051,10 +1063,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 	for inboundIndex >= len(c.inbound) {
 		c.inbound = append(c.inbound, recv{})
 	}
-	if inboundIndex != 0 {
-		// log.Printf("packet out of order, index=%d", inboundIndex)
-	}
 	c.inbound[inboundIndex] = recv{true, payload, h.Type}
+	// if h.Type==stFin{
+	// 	c.gotFin
 	c.processInbound()
 	c.sendState()
 }
@@ -1093,14 +1104,13 @@ func (c *Conn) assertHeader(h header) {
 
 func (c *Conn) processInbound() {
 	// Consume consecutive next packets.
-	for len(c.inbound) > 0 && c.inbound[0].seen {
+	for !c.gotFin && len(c.inbound) > 0 && c.inbound[0].seen {
 		c.ack_nr++
 		p := c.inbound[0]
 		c.inbound = c.inbound[1:]
 		c.readBuf = append(c.readBuf, p.data...)
 		if p.Type == stFin {
-			c.finish()
-			break
+			c.gotFin = true
 		}
 	}
 }
@@ -1125,7 +1135,7 @@ func (c *Conn) connect() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq_nr = 1
-	_, err := c.write(stSyn, c.recv_id, nil, c.seq_nr)
+	err := c.writeSyn()
 	if err != nil {
 		return err
 	}
@@ -1133,7 +1143,7 @@ func (c *Conn) connect() error {
 	if logLevel >= 2 {
 		log.Printf("sent syn")
 	}
-	c.seq_nr++
+	// c.seq_nr++
 	c.waitAck(1)
 	if c.err != nil {
 		err = c.err
@@ -1277,22 +1287,17 @@ func (s *packetConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	return s.real.WriteTo(b, addr)
 }
 
-func (c *Conn) finish() {
-	if c.cs == csSentFin {
+func (c *Conn) writeFin() (err error) {
+	if c.sentFin {
 		return
 	}
-	defer c.event.Broadcast()
-	finSeqNr := c.seq_nr
-	if _, err := c.write(stFin, c.send_id, nil, finSeqNr); err != nil {
-		c.destroy(fmt.Errorf("error sending FIN: %s", err))
+	_, err = c.write(stFin, c.send_id, nil, c.seq_nr)
+	if err != nil {
 		return
 	}
-	if c.cs == csGotFin {
-		c.destroy(nil)
-		return
-	}
-	c.seq_nr++ // Spec says set to "eof_pkt".
-	c.changeState(csSentFin)
+	c.sentFin = true
+	c.event.Broadcast()
+	return
 }
 
 func (c *Conn) destroy(reason error) {
@@ -1302,6 +1307,7 @@ func (c *Conn) destroy(reason error) {
 	if c.cs == csDestroy {
 		return
 	}
+	c.writeFin()
 	c.changeState(csDestroy)
 	c.err = reason
 	c.event.Broadcast()
@@ -1314,8 +1320,7 @@ func (c *Conn) destroy(reason error) {
 func (c *Conn) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.finish()
-	return nil
+	return c.writeFin()
 }
 
 func (c *Conn) LocalAddr() net.Addr {
@@ -1329,7 +1334,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		if len(c.readBuf) != 0 {
 			break
 		}
-		if c.cs == csDestroy || c.cs == csSentFin {
+		if c.cs == csDestroy || c.gotFin || c.sentFin {
 			err = c.err
 			if err == nil {
 				err = io.EOF
@@ -1345,7 +1350,6 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		}
 		c.event.Wait()
 	}
-	// log.Printf("read some data!")
 	n = copy(b, c.readBuf)
 	c.readBuf = c.readBuf[n:]
 
@@ -1364,19 +1368,14 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for len(p) != 0 {
-		if c.cs != csConnected {
-			err = io.ErrClosedPipe
-			return
-		}
 		for {
-			// If we're not in a connected state, we let .write() give an
-			// appropriate error, below.
-			if c.cs != csConnected {
-				break
+			if c.sentFin {
+				err = io.ErrClosedPipe
+				return
 			}
 			// If peerWndSize is 0, we still want to send something, so don't
 			// block until we exceed it.
-			if c.cur_window() <= c.peerWndSize && len(c.unackedSends) < 64 {
+			if c.cur_window() <= c.peerWndSize && len(c.unackedSends) < 64 && c.cs == csConnected {
 				break
 			}
 			if c.connDeadlines.write.deadlineExceeded() {
@@ -1390,7 +1389,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 		if err != nil {
 			return
 		}
-		c.seq_nr++
+		// c.seq_nr++
 		n += n1
 		p = p[n1:]
 	}

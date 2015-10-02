@@ -234,6 +234,7 @@ func connectSelfLots(n int, t testing.TB) {
 	}
 	s.mu.Lock()
 	for len(s.conns) != 0 {
+		// log.Print(len(s.conns))
 		s.event.Wait()
 	}
 	s.mu.Unlock()
