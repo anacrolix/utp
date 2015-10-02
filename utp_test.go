@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -21,6 +22,7 @@ func init() {
 }
 
 func TestUTPPingPong(t *testing.T) {
+	defer goroutineLeakCheck(t)()
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	defer s.Close()
@@ -54,7 +56,29 @@ func TestUTPPingPong(t *testing.T) {
 	<-pingerClosed
 }
 
+func goroutineLeakCheck(t testing.TB) func() {
+	if !testing.Verbose() {
+		return func() {}
+	}
+	numStart := runtime.NumGoroutine()
+	return func() {
+		var numNow int
+		for range iter.N(1) {
+			numNow = runtime.NumGoroutine()
+			if numNow == numStart {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		// I'd print stacks, or treat this as fatal, but I think
+		// runtime.NumGoroutine is including system routines for which we are
+		// not provided the stacks, and are spawned unpredictably.
+		t.Logf("have %d goroutines, started with %d", numNow, numStart)
+	}
+}
+
 func TestDialTimeout(t *testing.T) {
+	defer goroutineLeakCheck(t)()
 	s, _ := NewSocket("udp", "localhost:0")
 	defer s.Close()
 	conn, err := DialTimeout(s.Addr().String(), 10*time.Millisecond)
@@ -189,6 +213,7 @@ func TestConnReadDeadline(t *testing.T) {
 }
 
 func connectSelfLots(n int, t testing.TB) {
+	defer goroutineLeakCheck(t)()
 	s, err := NewSocket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
