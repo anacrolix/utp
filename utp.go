@@ -135,27 +135,12 @@ type Socket struct {
 	reads   chan read
 	closing chan struct{}
 
-	raw packetConn
+	unusedReads chan read
+	connDeadlines
 	// If a read error occurs on the underlying net.PacketConn, it is put
 	// here. This is because reading is done in its own goroutine to dispatch
 	// to uTP Conns.
 	ReadErr error
-}
-
-// Returns a net.PacketConn that emulates the expected behaviour of the real
-// net.PacketConn underlying the Socket. It is not however the real one, as
-// Socket requires exclusive access to that.
-func (s *Socket) PacketConn() net.PacketConn {
-	return &s.raw
-}
-
-type packetConn struct {
-	real net.PacketConn
-	connDeadlines
-
-	mu          sync.Mutex
-	unusedReads chan read
-	closed      bool
 }
 
 type read struct {
@@ -301,7 +286,7 @@ func (h *header) Marshal() (ret []byte) {
 
 var (
 	_ net.Listener   = &Socket{}
-	_ net.PacketConn = &packetConn{}
+	_ net.PacketConn = &Socket{}
 )
 
 const (
@@ -437,14 +422,14 @@ func NewSocket(network, addr string) (s *Socket, err error) {
 		backlog: make(map[syn]struct{}, backlog),
 		reads:   make(chan read, 1),
 		closing: make(chan struct{}),
+
+		unusedReads: make(chan read, 100),
 	}
 	s.event.L = &s.mu
 	s.pc, err = net.ListenPacket(network, addr)
 	if err != nil {
 		return
 	}
-	s.raw.unusedReads = make(chan read, 100)
-	s.raw.real = s.pc
 	go s.reader()
 	go s.dispatcher()
 	return
@@ -476,15 +461,10 @@ func (s *Socket) reader() {
 }
 
 func (s *Socket) unusedRead(read read) {
-	// log.Printf("unused read from %q", read.from.String())
-	s.raw.mu.Lock()
-	defer s.raw.mu.Unlock()
-	if s.raw.closed {
-		return
-	}
 	select {
-	case s.raw.unusedReads <- read:
+	case s.unusedReads <- read:
 	default:
+		// Drop the packet.
 	}
 }
 
@@ -1199,12 +1179,15 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 	c.detach = func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		defer s.event.Broadcast()
 		if s.conns[key] != c {
 			panic("conn changed")
 		}
 		// log.Println("detached", key)
 		delete(s.conns, key)
-		s.event.Broadcast()
+		if len(s.conns) == 0 {
+			s.pc.Close()
+		}
 	}
 	return true
 }
@@ -1278,36 +1261,19 @@ func (s *Socket) Close() (err error) {
 		return
 	default:
 	}
-	close(s.closing)
-	go func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		for len(s.conns) != 0 {
-			s.event.Wait()
-		}
-		s.pc.Close()
-		s.event.Broadcast()
-	}()
-	s.raw.Close()
 	s.event.Broadcast()
-	return
-}
-
-func (me *packetConn) Close() (err error) {
-	me.mu.Lock()
-	defer me.mu.Unlock()
-	if !me.closed {
-		close(me.unusedReads)
+	close(s.closing)
+	if len(s.conns) == 0 {
+		err = s.pc.Close()
 	}
-	me.closed = true
 	return
 }
 
-func (s *packetConn) LocalAddr() net.Addr {
-	return s.real.LocalAddr()
+func (s *Socket) LocalAddr() net.Addr {
+	return s.pc.LocalAddr()
 }
 
-func (s *packetConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
+func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	read, ok := <-s.unusedReads
 	if !ok {
 		err = io.EOF
@@ -1317,8 +1283,8 @@ func (s *packetConn) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
 	return
 }
 
-func (s *packetConn) WriteTo(b []byte, addr net.Addr) (int, error) {
-	return s.real.WriteTo(b, addr)
+func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
+	return s.pc.WriteTo(b, addr)
 }
 
 func (c *Conn) writeFin() (err error) {
