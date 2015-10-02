@@ -23,6 +23,7 @@ func init() {
 func TestUTPPingPong(t *testing.T) {
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
+	defer s.Close()
 	pingerClosed := make(chan struct{})
 	go func() {
 		defer close(pingerClosed)
@@ -38,9 +39,8 @@ func TestUTPPingPong(t *testing.T) {
 		log.Printf("got pong")
 	}()
 	a, err := s.Accept()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	defer a.Close()
 	log.Printf("accepted %s", a)
 	buf := make([]byte, 42)
 	n, err := a.Read(buf)
@@ -66,16 +66,12 @@ func TestDialTimeout(t *testing.T) {
 }
 
 func TestMinMaxHeaderType(t *testing.T) {
-	if stMax != stSyn {
-		t.FailNow()
-	}
+	require.Equal(t, stSyn, stMax)
 }
 
 func TestUTPRawConn(t *testing.T) {
 	l, err := NewSocket("udp", "")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	defer l.Close()
 	go func() {
 		for {
@@ -87,10 +83,13 @@ func TestUTPRawConn(t *testing.T) {
 	}()
 	// Connect a UTP peer to see if the RawConn will still work.
 	log.Print("dialing")
-	utpPeer, err := func() *Socket {
+	utpPeer := func() net.Conn {
 		s, _ := NewSocket("udp", "")
-		return s
-	}().Dial(fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
+		defer s.Close()
+		ret, err := s.Dial(fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
+		require.NoError(t, err)
+		return ret
+	}()
 	log.Print("dial returned")
 	if err != nil {
 		t.Fatalf("error dialing utp listener: %s", err)
@@ -384,5 +383,4 @@ func TestCloseDetachesQuickly(t *testing.T) {
 		s.event.Wait()
 	}
 	s.mu.Unlock()
-
 }
