@@ -35,10 +35,8 @@ const (
 	// make room.
 	backlog = 50
 
-	// Experimentation on localhost on OSX gives me this value. It appears to
-	// be the largest approximate datagram size before remote libutp starts
-	// selectively acking.
-	minMTU     = 576
+	// IPv6 min MTU is 1280, -40 for IPv6 header, and ~8 for fragment header?
+	minMTU     = 1232
 	recvWindow = 0x8000 // 32KiB
 	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
 	// ACK.
