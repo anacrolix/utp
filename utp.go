@@ -375,6 +375,8 @@ type Conn struct {
 	inbound []recv
 
 	connDeadlines
+
+	latencies []time.Duration
 }
 
 type send struct {
@@ -384,6 +386,7 @@ type send struct {
 	// This send was skipped in a selective ack.
 	resend   func()
 	timedOut func()
+	conn     *Conn
 
 	mu          sync.Mutex
 	acksSkipped int
@@ -391,15 +394,18 @@ type send struct {
 	numResends  int
 }
 
-func (s *send) Ack() {
+func (s *send) Ack() (latency time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resendTimer.Stop()
 	select {
 	case <-s.acked:
+		return
 	default:
 		close(s.acked)
 	}
+	latency = time.Since(s.started)
+	return
 }
 
 type recv struct {
@@ -743,6 +749,8 @@ func nowTimestamp() uint32 {
 
 // Send the given payload with an up to date header.
 func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err error) {
+	// Always selectively ack the first 64 packets. Don't bother with rest for
+	// now.
 	selAck := selectiveAckBitmask(make([]byte, 8))
 	for i := 1; i < 65; i++ {
 		if len(c.inbound) <= i {
@@ -800,10 +808,6 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 	return
 }
 
-func (s *send) resendTimeout() time.Duration {
-	return jitter.Duration(3*time.Second, time.Second)
-}
-
 func (s *send) timeoutResend() {
 	select {
 	case <-s.acked:
@@ -814,10 +818,13 @@ func (s *send) timeoutResend() {
 		s.timedOut()
 		return
 	}
+	s.conn.mu.Lock()
+	rt := s.conn.resendTimeout()
+	s.conn.mu.Unlock()
 	go s.resend()
 	s.mu.Lock()
 	s.numResends++
-	s.resendTimer.Reset(s.resendTimeout())
+	s.resendTimer.Reset(rt)
 	s.mu.Unlock()
 }
 
@@ -872,12 +879,25 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 			c.destroy(errAckTimeout)
 			c.mu.Unlock()
 		},
+		conn: c,
 	}
 	send.mu.Lock()
-	send.resendTimer = time.AfterFunc(send.resendTimeout(), send.timeoutResend)
+	send.resendTimer = time.AfterFunc(c.resendTimeout(), send.timeoutResend)
 	send.mu.Unlock()
 	c.unackedSends = append(c.unackedSends, send)
 	c.seq_nr++
+	return
+}
+
+func (c *Conn) latency() (ret time.Duration) {
+	if len(c.latencies) == 0 {
+		// Sort of the p95 of latencies?
+		return 200 * time.Millisecond
+	}
+	for _, l := range c.latencies {
+		ret += l
+	}
+	ret = (ret + time.Duration(len(c.latencies)) - 1) / time.Duration(len(c.latencies))
 	return
 }
 
@@ -926,7 +946,13 @@ func (c *Conn) ack(nr uint16) {
 		log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
 		return
 	}
-	c.unackedSends[i].Ack()
+	latency := c.unackedSends[i].Ack()
+	if latency != 0 {
+		c.latencies = append(c.latencies, latency)
+		if len(c.latencies) > 10 {
+			c.latencies = c.latencies[len(c.latencies)-10:]
+		}
+	}
 	for {
 		if len(c.unackedSends) == 0 {
 			break
@@ -982,6 +1008,16 @@ func (c *Conn) seqSend(seqNr uint16) *send {
 	return c.unackedSends[i]
 }
 
+func (c *Conn) resendTimeout() time.Duration {
+	l := c.latency()
+	if l < 10*time.Millisecond {
+		l = 10 * time.Millisecond
+	}
+	ret := jitter.Duration(3*l, l)
+	// log.Print(ret)
+	return ret
+}
+
 func (c *Conn) ackSkipped(seqNr uint16) {
 	send := c.seqSend(seqNr)
 	if send == nil {
@@ -994,7 +1030,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	case 3, 60:
 		ackSkippedResends.Add(1)
 		go send.resend()
-		send.resendTimer.Reset(send.resendTimeout())
+		send.resendTimer.Reset(c.resendTimeout())
 	default:
 	}
 }
