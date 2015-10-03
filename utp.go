@@ -18,7 +18,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"math/rand"
 	"net"
 	"os"
@@ -358,14 +357,12 @@ type Conn struct {
 
 	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
-	inbound []recv
-
+	inbound   []recv
+	packetsIn chan packet
 	connDeadlines
-
-	latencies []time.Duration
-
+	latencies        []time.Duration
 	pendingSendState bool
-	sendStateTimer   *time.Timer
+	destroyed        chan struct{}
 }
 
 type send struct {
@@ -424,7 +421,7 @@ func (c *Conn) connected() bool {
 func NewSocket(network, addr string) (s *Socket, err error) {
 	s = &Socket{
 		backlog: make(map[syn]struct{}, backlog),
-		reads:   make(chan read, 1),
+		reads:   make(chan read, 100),
 		closing: make(chan struct{}),
 
 		unusedReads: make(chan read, 100),
@@ -498,12 +495,18 @@ func (s *Socket) pushBacklog(syn syn) {
 }
 
 func (s *Socket) dispatcher() {
-	for read := range s.reads {
-		if len(read.data) < 20 {
-			s.unusedRead(read)
-			continue
+	for {
+		select {
+		case read, ok := <-s.reads:
+			if !ok {
+				return
+			}
+			if len(read.data) < 20 {
+				s.unusedRead(read)
+				continue
+			}
+			s.dispatch(read)
 		}
-		go s.dispatch(read)
 	}
 }
 
@@ -641,23 +644,24 @@ func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 	return
 }
 
+func (c *Conn) sendPendingState() {
+	if !c.pendingSendState {
+		return
+	}
+	c.sendState()
+}
+
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
 		socket:         s,
 		remoteAddr:     addr,
 		startTimestamp: nowTimestamp(),
 		created:        time.Now(),
+		packetsIn:      make(chan packet, 100),
+		destroyed:      make(chan struct{}),
 	}
 	c.event.L = &c.mu
 	c.mu.Lock()
-	c.sendStateTimer = time.AfterFunc(math.MaxInt64, func() {
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if !c.pendingSendState {
-			return
-		}
-		c.sendState()
-	})
 	c.connDeadlines.read.setCallback(func() {
 		c.mu.Lock()
 		c.event.Broadcast()
@@ -669,6 +673,7 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		c.mu.Unlock()
 	})
 	c.mu.Unlock()
+	go c.deliveryProcessor()
 	return
 }
 
@@ -791,17 +796,10 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 
 func (me *Conn) unpendSendState() {
 	me.pendingSendState = false
-	me.sendStateTimer.Stop()
 }
 
 func (c *Conn) pendSendState() {
-	if c.pendingSendState {
-		return
-	}
 	c.pendingSendState = true
-	if c.sendStateTimer.Reset(250 * time.Microsecond) {
-		panic("extended send state timer")
-	}
 }
 
 func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
@@ -1045,7 +1043,41 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	}
 }
 
+type packet struct {
+	h       header
+	payload []byte
+}
+
 func (c *Conn) deliver(h header, payload []byte) {
+	c.packetsIn <- packet{h, payload}
+}
+
+func (c *Conn) deliveryProcessor() {
+	for {
+		select {
+		case p := <-c.packetsIn:
+			c.processDelivery(p.h, p.payload)
+			timeout := time.After(500 * time.Microsecond)
+		batched:
+			for {
+				select {
+				case p := <-c.packetsIn:
+					c.processDelivery(p.h, p.payload)
+				case <-timeout:
+					break batched
+				}
+			}
+			c.mu.Lock()
+			c.sendPendingState()
+			c.mu.Unlock()
+		case <-c.destroyed:
+			return
+		}
+	}
+}
+
+func (c *Conn) processDelivery(h header, payload []byte) {
+	deliveriesProcessed.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	defer c.event.Broadcast()
@@ -1337,6 +1369,7 @@ func (c *Conn) destroy(reason error) {
 	if c.cs == csDestroy {
 		return
 	}
+	close(c.destroyed)
 	c.writeFin()
 	c.changeState(csDestroy)
 	c.err = reason
