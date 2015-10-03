@@ -54,7 +54,11 @@ const (
 
 var (
 	ackSkippedResends = expvar.NewInt("utpAckSkippedResends")
-	sendBufferPool    = sync.Pool{
+	// Inbound packets processed by a Conn.
+	deliveriesProcessed = expvar.NewInt("utpDeliveriesProcessed")
+	sentStatePackets    = expvar.NewInt("utpSentStatePackets")
+	unusedReads         = expvar.NewInt("utpUnusedReads")
+	sendBufferPool      = sync.Pool{
 		New: func() interface{} { return make([]byte, minMTU) },
 	}
 )
@@ -462,6 +466,7 @@ func (s *Socket) reader() {
 }
 
 func (s *Socket) unusedRead(read read) {
+	unusedReads.Add(1)
 	select {
 	case s.unusedReads <- read:
 	default:
@@ -933,6 +938,7 @@ func (c *Conn) cur_window() (window uint32) {
 
 func (c *Conn) sendState() {
 	c.send(stState, c.send_id, nil, c.seq_nr)
+	sentStatePackets.Add(1)
 }
 
 func seqLess(a, b uint16) bool {
