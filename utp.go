@@ -1111,10 +1111,8 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	if h.Type == stState {
 		return
 	}
+	c.pendSendState()
 	if !seqLess(c.ack_nr, h.SeqNr) {
-		if h.Type == stSyn {
-			c.pendSendState()
-		}
 		// Already received this packet.
 		return
 	}
@@ -1140,10 +1138,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 		c.inbound = append(c.inbound, recv{})
 	}
 	c.inbound[inboundIndex] = recv{true, payload, h.Type}
-	// if h.Type==stFin{
-	// 	c.gotFin
 	c.processInbound()
-	c.pendSendState()
 }
 
 func (c *Conn) applyAcks(h header) {
