@@ -7,6 +7,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/signal"
 
 	"github.com/anacrolix/envpprof"
 
@@ -39,6 +40,12 @@ func main() {
 		}
 	}
 	defer conn.Close()
+	go func() {
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, os.Interrupt)
+		<-sig
+		conn.Close()
+	}()
 	writerDone := make(chan struct{})
 	go func() {
 		defer close(writerDone)
