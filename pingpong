@@ -30,7 +30,7 @@ function other_ucat() {
 md5 "$1"
 
 rate() {
-	pv -a -W
+	pv -a -W -b
 }
 
 echo 'utp->other_ucat'
