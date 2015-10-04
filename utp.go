@@ -137,7 +137,7 @@ type Socket struct {
 	conns   map[connKey]*Conn
 	backlog map[syn]struct{}
 	reads   chan read
-	closing chan struct{}
+	closing bool
 
 	unusedReads chan read
 	connDeadlines
@@ -426,7 +426,6 @@ func NewSocket(network, addr string) (s *Socket, err error) {
 	s = &Socket{
 		backlog: make(map[syn]struct{}, backlog),
 		reads:   make(chan read, 100),
-		closing: make(chan struct{}),
 
 		unusedReads: make(chan read, 100),
 	}
@@ -453,9 +452,7 @@ func (s *Socket) reader() {
 		}
 		n, addr, err := s.pc.ReadFrom(b[:])
 		if err != nil {
-			select {
-			case <-s.closing:
-			default:
+			if !s.closing {
 				s.ReadErr = err
 			}
 			return
@@ -1242,14 +1239,13 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 	c.detach = func() {
 		s.mu.Lock()
 		defer s.mu.Unlock()
-		defer s.event.Broadcast()
 		if s.conns[key] != c {
 			panic("conn changed")
 		}
-		// log.Println("detached", key)
 		delete(s.conns, key)
-		if len(s.conns) == 0 {
-			s.pc.Close()
+		s.event.Broadcast()
+		if s.closing {
+			s.teardown()
 		}
 	}
 	return true
@@ -1259,16 +1255,14 @@ func (s *Socket) nextSyn() (syn syn, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for {
+		if s.closing {
+			return
+		}
 		for k := range s.backlog {
 			syn = k
 			delete(s.backlog, k)
 			ok = true
 			return
-		}
-		select {
-		case <-s.closing:
-			return
-		default:
 		}
 		s.event.Wait()
 	}
@@ -1316,17 +1310,17 @@ func (s *Socket) Addr() net.Addr {
 
 // Marks the Socket for close. Currently this just axes the underlying OS
 // socket.
-func (s *Socket) Close() (err error) {
+func (s *Socket) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	select {
-	case <-s.closing:
-		return
-	default:
-	}
+	s.closing = true
 	s.event.Broadcast()
-	close(s.closing)
+	return s.teardown()
+}
+
+func (s *Socket) teardown() (err error) {
 	if len(s.conns) == 0 {
+		s.event.Broadcast()
 		err = s.pc.Close()
 	}
 	return

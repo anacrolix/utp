@@ -409,3 +409,48 @@ func TestCloseDetachesQuickly(t *testing.T) {
 	}
 	s.mu.Unlock()
 }
+
+// Check that closing, and resulting detach of a Conn doesn't close the parent
+// Socket. We Accept, then close the connection and ensure it's detached. Then
+// Accept again to check the Socket is still functional and unclosed.
+func TestConnCloseUnclosedSocket(t *testing.T) {
+	s, err := NewSocket("udp", "localhost:0")
+	require.NoError(t, err)
+	defer func() {
+		require.NoError(t, s.Close())
+	}()
+	// Prevents the dialing goroutine from closing its end of the Conn before
+	// we can check that it has been registered in the listener.
+	dialerSync := make(chan struct{})
+
+	go func() {
+		for range iter.N(2) {
+			c, err := Dial(s.Addr().String())
+			require.NoError(t, err)
+			<-dialerSync
+			err = c.Close()
+			require.NoError(t, err)
+		}
+	}()
+	for range iter.N(2) {
+		a, err := s.Accept()
+		require.NoError(t, err)
+		// We do this in a closure because we need to unlock Server.mu if the
+		// test failure exception is thrown. "Do as we say, not as we do" -Go
+		// team.
+		func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			require.Len(t, s.conns, 1)
+		}()
+		dialerSync <- struct{}{}
+		require.NoError(t, a.Close())
+		func() {
+			s.mu.Lock()
+			defer s.mu.Unlock()
+			for len(s.conns) != 0 {
+				s.event.Wait()
+			}
+		}()
+	}
+}
