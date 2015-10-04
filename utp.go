@@ -46,6 +46,7 @@ const (
 
 	// Maximum out-of-order packets to buffer.
 	maxUnackedInbound = 64
+	maxUnackedSends   = 64
 
 	// If an send isn't acknowledged after this period, its connection is
 	// destroyed. There are resends during this period.
@@ -341,7 +342,9 @@ type Conn struct {
 	lastAck          uint16
 	lastTimeDiff     uint32
 	peerWndSize      uint32
+	cur_window       uint32
 
+	// Data waiting to be Read.
 	readBuf []byte
 
 	socket     *Socket
@@ -361,8 +364,9 @@ type Conn struct {
 
 	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
-	inbound   []recv
-	packetsIn chan packet
+	inbound    []recv
+	inboundWnd uint32
+	packetsIn  chan packet
 	connDeadlines
 	latencies        []time.Duration
 	pendingSendState bool
@@ -384,7 +388,7 @@ type send struct {
 	numResends  int
 }
 
-func (s *send) Ack() (latency time.Duration) {
+func (s *send) Ack() (latency time.Duration, first bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.resendTimer.Stop()
@@ -392,8 +396,9 @@ func (s *send) Ack() (latency time.Duration) {
 	case <-s.acked:
 		return
 	default:
-		close(s.acked)
 	}
+	close(s.acked)
+	first = true
 	latency = time.Since(s.started)
 	return
 }
@@ -733,15 +738,11 @@ func (c *Conn) wndSize() uint32 {
 	if len(c.inbound) > maxUnackedInbound/2 {
 		return 0
 	}
-	var buffered int
-	for _, r := range c.inbound {
-		buffered += len(r.data)
-	}
-	buffered += len(c.readBuf)
-	if buffered >= recvWindow {
+	buffered := uint32(len(c.readBuf)) + c.inboundWnd
+	if buffered > recvWindow {
 		return 0
 	}
-	return recvWindow - uint32(buffered)
+	return recvWindow - buffered
 }
 
 func nowTimestamp() uint32 {
@@ -895,6 +896,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	send.resendTimer = time.AfterFunc(c.resendTimeout(), send.timeoutResend)
 	send.mu.Unlock()
 	c.unackedSends = append(c.unackedSends, send)
+	c.cur_window += send.payloadSize
 	c.seq_nr++
 	return
 }
@@ -917,17 +919,6 @@ func (c *Conn) numUnackedSends() (num int) {
 		case <-s.acked:
 		default:
 			num++
-		}
-	}
-	return
-}
-
-func (c *Conn) cur_window() (window uint32) {
-	for _, s := range c.unackedSends {
-		select {
-		case <-s.acked:
-		default:
-			window += s.payloadSize
 		}
 	}
 	return
@@ -957,8 +948,10 @@ func (c *Conn) ack(nr uint16) {
 		log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
 		return
 	}
-	latency := c.unackedSends[i].Ack()
-	if latency != 0 {
+	s := c.unackedSends[i]
+	latency, first := s.Ack()
+	if first {
+		c.cur_window -= s.payloadSize
 		c.latencies = append(c.latencies, latency)
 		if len(c.latencies) > 10 {
 			c.latencies = c.latencies[len(c.latencies)-10:]
@@ -1141,6 +1134,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 		c.inbound = append(c.inbound, recv{})
 	}
 	c.inbound[inboundIndex] = recv{true, payload, h.Type}
+	c.inboundWnd += uint32(len(payload))
 	c.processInbound()
 }
 
@@ -1182,6 +1176,7 @@ func (c *Conn) processInbound() {
 		c.ack_nr++
 		p := c.inbound[0]
 		c.inbound = c.inbound[1:]
+		c.inboundWnd -= uint32(len(p.data))
 		c.readBuf = append(c.readBuf, p.data...)
 		if p.Type == stFin {
 			c.gotFin = true
@@ -1433,7 +1428,9 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			}
 			// If peerWndSize is 0, we still want to send something, so don't
 			// block until we exceed it.
-			if c.cur_window() <= c.peerWndSize && len(c.unackedSends) < 64 && c.cs == csConnected {
+			if c.cs == csConnected &&
+				len(c.unackedSends) < maxUnackedSends &&
+				c.cur_window <= c.peerWndSize {
 				break
 			}
 			if c.connDeadlines.write.deadlineExceeded() {
