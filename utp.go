@@ -835,7 +835,7 @@ func (s *send) timeoutResend() {
 	go s.resend()
 	s.mu.Lock()
 	s.numResends++
-	s.resendTimer.Reset(rt)
+	s.resendTimer.Reset(rt * time.Duration(s.numResends))
 	s.mu.Unlock()
 }
 
@@ -1034,7 +1034,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	case 3, 60:
 		ackSkippedResends.Add(1)
 		go send.resend()
-		send.resendTimer.Reset(c.resendTimeout())
+		send.resendTimer.Reset(c.resendTimeout() * time.Duration(send.numResends))
 	default:
 	}
 }
