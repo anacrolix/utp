@@ -94,6 +94,7 @@ func TestMinMaxHeaderType(t *testing.T) {
 }
 
 func TestUTPRawConn(t *testing.T) {
+	t.Parallel()
 	l, err := NewSocket("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
@@ -167,6 +168,7 @@ func TestUTPRawConn(t *testing.T) {
 }
 
 func TestConnReadDeadline(t *testing.T) {
+	t.Parallel()
 	ls, _ := NewSocket("udp", "localhost:0")
 	ds, _ := NewSocket("udp", "localhost:0")
 	dcReadErr := make(chan error)
@@ -267,6 +269,7 @@ func connectSelfLots(n int, t testing.TB) {
 
 // Connect to ourself heaps.
 func TestConnectSelf(t *testing.T) {
+	t.Parallel()
 	// A rough guess says that at worst, I can only have 0x10000/3 connections
 	// to the same socket, due to fragmentation in the assigned connection
 	// IDs.
@@ -330,6 +333,7 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 // Make sure that we can reset AfterFunc timers, so we don't have to create
 // brand new ones everytime they fire. Specifically for the Conn resend timer.
 func TestResetAfterFuncTimer(t *testing.T) {
+	t.Parallel()
 	fired := make(chan struct{})
 	timer := time.AfterFunc(time.Millisecond, func() {
 		fired <- struct{}{}
@@ -392,6 +396,7 @@ func TestReadFinishedConn(t *testing.T) {
 }
 
 func TestCloseDetachesQuickly(t *testing.T) {
+	t.Parallel()
 	s, _ := NewSocket("udp", "localhost:0")
 	defer s.Close()
 	go func() {
@@ -414,6 +419,7 @@ func TestCloseDetachesQuickly(t *testing.T) {
 // Socket. We Accept, then close the connection and ensure it's detached. Then
 // Accept again to check the Socket is still functional and unclosed.
 func TestConnCloseUnclosedSocket(t *testing.T) {
+	t.Parallel()
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
