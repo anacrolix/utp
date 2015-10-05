@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/anacrolix/jitter"
-	"github.com/anacrolix/missinggo"
 )
 
 const (
@@ -1122,9 +1121,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	// 64 should correspond to 8 bytes of selective ack.
 	if inboundIndex >= maxUnackedInbound {
 		// Discard packet too far ahead.
-		if missinggo.CryHeard() {
-			// I can't tell if this occurs due to bad peers, or something
-			// missing in the implementation.
+		if logLevel >= 1 {
 			log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
 		}
 		return
