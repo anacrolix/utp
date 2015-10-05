@@ -37,7 +37,7 @@ const (
 
 	// IPv6 min MTU is 1280, -40 for IPv6 header, and ~8 for fragment header?
 	minMTU     = 1232
-	recvWindow = 0x8000 // 32KiB
+	recvWindow = 1 << 18 // 256KiB
 	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
 	// ACK.
 	maxHeaderSize  = 30
@@ -45,8 +45,8 @@ const (
 	maxRecvSize    = 0x2000
 
 	// Maximum out-of-order packets to buffer.
-	maxUnackedInbound = 64
-	maxUnackedSends   = 64
+	maxUnackedInbound = 256
+	maxUnackedSends   = 256
 
 	// If an send isn't acknowledged after this period, its connection is
 	// destroyed. There are resends during this period.
