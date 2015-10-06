@@ -424,23 +424,31 @@ func (c *Conn) connected() bool {
 	return c.cs == csConnected
 }
 
-// addr is used to create a listening UDP conn which becomes the underlying
-// net.PacketConn for the Socket.
-func NewSocket(network, addr string) (s *Socket, err error) {
+// Create a Socket, using the provided net.PacketConn. If you want to retain
+// use of the net.PacketConn after the Socket closes it, override your
+// net.PacketConn's Close method.
+func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	s = &Socket{
 		backlog: make(map[syn]struct{}, backlog),
 		reads:   make(chan read, 100),
+		pc:      pc,
 
 		unusedReads: make(chan read, 100),
 	}
 	s.event.L = &s.mu
-	s.pc, err = net.ListenPacket(network, addr)
-	if err != nil {
-		return
-	}
 	go s.reader()
 	go s.dispatcher()
 	return
+}
+
+// addr is used to create a listening UDP conn which becomes the underlying
+// net.PacketConn for the Socket.
+func NewSocket(network, addr string) (s *Socket, err error) {
+	pc, err := net.ListenPacket(network, addr)
+	if err != nil {
+		return
+	}
+	return NewSocketFromPacketConn(pc)
 }
 
 func packetDebugString(h *header, payload []byte) string {
