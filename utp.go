@@ -293,13 +293,6 @@ var (
 	_ net.PacketConn = &Socket{}
 )
 
-const (
-	csInvalid = iota
-	csSynSent
-	csConnected
-	csDestroy
-)
-
 type st int
 
 func (me st) String() string {
@@ -352,14 +345,15 @@ type Conn struct {
 	startTimestamp uint32
 	// When the conn was allocated.
 	created time.Time
-	// Callback to unregister Conn from a parent Socket. Should be called when
-	// no more packets will be handled.
-	detach func()
 
-	cs      int
-	gotFin  bool
-	sentFin bool
-	err     error
+	sentSyn  bool
+	synAcked bool
+	gotFin   bool
+	wroteFin bool
+	finAcked bool
+	err      error
+	closing  bool
+	closed   bool
 
 	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
@@ -369,11 +363,10 @@ type Conn struct {
 	connDeadlines
 	latencies        []time.Duration
 	pendingSendState bool
-	destroyed        chan struct{}
 }
 
 type send struct {
-	acked       chan struct{} // Closed with Conn lock.
+	acked       bool // Closed with Conn lock.
 	payloadSize uint32
 	started     time.Time
 	// This send was skipped in a selective ack.
@@ -381,22 +374,18 @@ type send struct {
 	timedOut func()
 	conn     *Conn
 
-	mu          sync.Mutex
 	acksSkipped int
 	resendTimer *time.Timer
 	numResends  int
 }
 
 func (s *send) Ack() (latency time.Duration, first bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	s.resendTimer.Stop()
-	select {
-	case <-s.acked:
+	if s.acked {
 		return
-	default:
 	}
-	close(s.acked)
+	s.acked = true
+	s.conn.event.Broadcast()
 	first = true
 	latency = time.Since(s.started)
 	return
@@ -418,10 +407,6 @@ func (c *Conn) age() time.Duration {
 
 func (c *Conn) timestamp() uint32 {
 	return nowTimestamp() - c.startTimestamp
-}
-
-func (c *Conn) connected() bool {
-	return c.cs == csConnected
 }
 
 // Create a Socket, using the provided net.PacketConn. If you want to retain
@@ -672,7 +657,6 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		startTimestamp: nowTimestamp(),
 		created:        time.Now(),
 		packetsIn:      make(chan packet, 100),
-		destroyed:      make(chan struct{}),
 	}
 	c.event.L = &c.mu
 	c.mu.Lock()
@@ -827,28 +811,24 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 }
 
 func (s *send) timeoutResend() {
-	select {
-	case <-s.acked:
-		return
-	default:
-	}
 	if time.Since(s.started) >= sendTimeout {
 		s.timedOut()
 		return
 	}
 	s.conn.mu.Lock()
+	defer s.conn.mu.Unlock()
+	if s.acked {
+		return
+	}
 	rt := s.conn.resendTimeout()
-	s.conn.mu.Unlock()
 	go s.resend()
-	s.mu.Lock()
 	s.numResends++
 	s.resendTimer.Reset(rt * time.Duration(s.numResends))
-	s.mu.Unlock()
 }
 
 func (me *Conn) writeSyn() (err error) {
-	if me.cs != csInvalid {
-		panic(me.cs)
+	if me.sentSyn {
+		panic("already sent syn")
 	}
 	_, err = me.write(stSyn, me.recv_id, nil, me.seq_nr)
 	return
@@ -860,13 +840,8 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	default:
 		panic(_type)
 	}
-	switch c.cs {
-	case csConnected, csSynSent, csInvalid:
-	default:
-		panic(c.cs)
-	}
-	if c.sentFin {
-		panic(c)
+	if c.wroteFin {
+		panic("can't write after fin")
 	}
 	if len(payload) > maxPayloadSize {
 		payload = payload[:maxPayloadSize]
@@ -881,7 +856,6 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 		payload = append(sendBufferPool.Get().([]byte)[:0:minMTU], payload...)
 	}
 	send := &send{
-		acked:       make(chan struct{}),
 		payloadSize: uint32(len(payload)),
 		started:     time.Now(),
 		resend: func() {
@@ -899,9 +873,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 		},
 		conn: c,
 	}
-	send.mu.Lock()
 	send.resendTimer = time.AfterFunc(c.resendTimeout(), send.timeoutResend)
-	send.mu.Unlock()
 	c.unackedSends = append(c.unackedSends, send)
 	c.cur_window += send.payloadSize
 	c.seq_nr++
@@ -922,9 +894,7 @@ func (c *Conn) latency() (ret time.Duration) {
 
 func (c *Conn) numUnackedSends() (num int) {
 	for _, s := range c.unackedSends {
-		select {
-		case <-s.acked:
-		default:
+		if !s.acked {
 			num++
 		}
 	}
@@ -968,9 +938,7 @@ func (c *Conn) ack(nr uint16) {
 		if len(c.unackedSends) == 0 {
 			break
 		}
-		select {
-		case <-c.unackedSends[0].acked:
-		default:
+		if !c.unackedSends[0].acked {
 			// Can't trim unacked sends any further.
 			return
 		}
@@ -1034,8 +1002,6 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	if send == nil {
 		return
 	}
-	send.mu.Lock()
-	defer send.mu.Unlock()
 	send.acksSkipped++
 	switch send.acksSkipped {
 	case 3, 60:
@@ -1056,26 +1022,34 @@ func (c *Conn) deliver(h header, payload []byte) {
 }
 
 func (c *Conn) deliveryProcessor() {
-	for {
-		select {
-		case p := <-c.packetsIn:
-			c.processDelivery(p.h, p.payload)
-			timeout := time.After(500 * time.Microsecond)
-		batched:
-			for {
-				select {
-				case p := <-c.packetsIn:
-					c.processDelivery(p.h, p.payload)
-				case <-timeout:
+	for p := range c.packetsIn {
+		c.processDelivery(p.h, p.payload)
+		timeout := time.After(500 * time.Microsecond)
+	batched:
+		for {
+			select {
+			case p, ok := <-c.packetsIn:
+				if !ok {
 					break batched
 				}
+				c.processDelivery(p.h, p.payload)
+			case <-timeout:
+				break batched
 			}
-			c.mu.Lock()
-			c.sendPendingState()
-			c.mu.Unlock()
-		case <-c.destroyed:
-			return
 		}
+		c.mu.Lock()
+		c.sendPendingState()
+		c.mu.Unlock()
+	}
+}
+
+func (c *Conn) updateStates() {
+	if c.gotFin {
+		c.writeFin()
+	}
+	if c.wroteFin && len(c.unackedSends) == 0 {
+		c.closed = true
+		c.event.Broadcast()
 	}
 }
 
@@ -1083,6 +1057,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	deliveriesProcessed.Add(1)
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	defer c.updateStates()
 	defer c.event.Broadcast()
 	c.assertHeader(h)
 	c.peerWndSize = h.WndSize
@@ -1093,21 +1068,15 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 		c.lastTimeDiff = c.timestamp() - h.Timestamp
 	}
 
-	// We want this connection destroyed, and our peer has acked everything.
-	if c.sentFin && len(c.unackedSends) == 0 {
-		// log.Print("gracefully completed")
-		c.destroy(nil)
-		return
-	}
 	if h.Type == stReset {
 		c.destroy(errors.New("peer reset"))
 		return
 	}
-	if c.cs == csSynSent {
+	if !c.synAcked {
 		if h.Type != stState {
 			return
 		}
-		c.changeState(csConnected)
+		c.synAcked = true
 		c.ack_nr = h.SeqNr - 1
 		return
 	}
@@ -1194,15 +1163,10 @@ func (c *Conn) waitAck(seq uint16) {
 	if send == nil {
 		return
 	}
-	c.mu.Unlock()
-	defer c.mu.Lock()
-	<-send.acked
+	for !send.acked {
+		c.event.Wait()
+	}
 	return
-}
-
-func (c *Conn) changeState(cs int) {
-	// log.Println(c, "goes", c.cs, "->", cs)
-	c.cs = cs
 }
 
 func (c *Conn) connect() error {
@@ -1213,7 +1177,7 @@ func (c *Conn) connect() error {
 	if err != nil {
 		return err
 	}
-	c.changeState(csSynSent)
+	c.sentSyn = true
 	if logLevel >= 2 {
 		log.Printf("sent syn")
 	}
@@ -1226,6 +1190,25 @@ func (c *Conn) connect() error {
 	return err
 }
 
+func (s *Socket) detacher(c *Conn, key connKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for !c.closed {
+		c.event.Wait()
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.conns[key] != c {
+		panic("conn changed")
+	}
+	delete(s.conns, key)
+	close(c.packetsIn)
+	s.event.Broadcast()
+	if s.closing {
+		s.teardown()
+	}
+}
+
 // Returns true if the connection was newly registered, false otherwise.
 func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn) bool {
 	if s.conns == nil {
@@ -1236,18 +1219,7 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 		return false
 	}
 	s.conns[key] = c
-	c.detach = func() {
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		if s.conns[key] != c {
-			panic("conn changed")
-		}
-		delete(s.conns, key)
-		s.event.Broadcast()
-		if s.closing {
-			s.teardown()
-		}
-	}
+	go s.detacher(c, key)
 	return true
 }
 
@@ -1283,7 +1255,8 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 		_c.seq_nr = uint16(rand.Int())
 		_c.lastAck = _c.seq_nr - 1
 		_c.ack_nr = syn.seq_nr
-		_c.cs = csConnected
+		_c.sentSyn = true
+		_c.synAcked = true
 		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr), _c) {
 			// SYN that triggered this accept duplicates existing connection.
 			// Ack again in case the SYN was a resend.
@@ -1345,40 +1318,41 @@ func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
 }
 
 func (c *Conn) writeFin() (err error) {
-	if c.sentFin {
+	if c.wroteFin {
 		return
 	}
 	_, err = c.write(stFin, c.send_id, nil, c.seq_nr)
 	if err != nil {
 		return
 	}
-	c.sentFin = true
+	c.wroteFin = true
 	c.event.Broadcast()
 	return
 }
 
 func (c *Conn) destroy(reason error) {
-	if c.err != nil && reason != nil {
-		log.Printf("duplicate destroy call: %s", reason)
-	}
-	if c.cs == csDestroy {
+	if c.closed {
 		return
 	}
-	close(c.destroyed)
-	c.writeFin()
-	c.changeState(csDestroy)
-	c.err = reason
+	c.closed = true
 	c.event.Broadcast()
-	c.detach()
-	for _, s := range c.unackedSends {
-		s.Ack()
-	}
+	c.err = reason
 }
 
-func (c *Conn) Close() error {
+func (c *Conn) Close() (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.writeFin()
+	err = c.writeFin()
+	c.closing = true
+	c.event.Broadcast()
+	if err != nil {
+		return
+	}
+	for !c.closed && !c.gotFin {
+		c.event.Wait()
+	}
+	err = c.err
+	return
 }
 
 func (c *Conn) LocalAddr() net.Addr {
@@ -1392,19 +1366,21 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		if len(c.readBuf) != 0 {
 			break
 		}
-		if c.cs == csDestroy || c.gotFin || c.sentFin {
+		if c.gotFin || (c.wroteFin && len(c.unackedSends) == 0) {
+			err = io.EOF
+			return
+		}
+		if c.closed {
+			err = errClosed
+			return
+		}
+		if c.err != nil {
 			err = c.err
-			if err == nil {
-				err = io.EOF
-			}
 			return
 		}
 		if c.connDeadlines.read.deadlineExceeded() {
 			err = errTimeout
 			return
-		}
-		if logLevel >= 2 {
-			log.Printf("nothing to read, state=%d", c.cs)
 		}
 		c.event.Wait()
 	}
@@ -1427,13 +1403,13 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	defer c.mu.Unlock()
 	for len(p) != 0 {
 		for {
-			if c.sentFin {
+			if c.wroteFin || c.gotFin {
 				err = io.ErrClosedPipe
 				return
 			}
 			// If peerWndSize is 0, we still want to send something, so don't
 			// block until we exceed it.
-			if c.cs == csConnected &&
+			if c.synAcked &&
 				len(c.unackedSends) < maxUnackedSends &&
 				c.cur_window <= c.peerWndSize {
 				break
