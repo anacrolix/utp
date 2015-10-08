@@ -155,7 +155,7 @@ func TestUTPRawConn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(time.Microsecond)
+		time.Sleep(10 * time.Microsecond)
 	}
 	select {
 	case <-readerStopped:
