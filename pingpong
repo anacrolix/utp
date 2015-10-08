@@ -42,7 +42,7 @@ wait
 
 echo 'other_ucat->utp'
 # Send from the other implementation, to this one.
-GO_UTP_LOGGING=0 GOPPROF= godo ${GODOFLAGS-} ./cmd/ucat -l -p 4000 | rate | md5 &
+GO_UTP_LOGGING=0 godo ${GODOFLAGS-} ./cmd/ucat -l -p 4000 | rate | md5 &
 # Never receive from h2so5's ucat without a small sleep first. Don't know why.
 # sleep 1
 other_ucat < "$1"
