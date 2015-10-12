@@ -46,10 +46,6 @@ const (
 	// Maximum out-of-order packets to buffer.
 	maxUnackedInbound = 256
 	maxUnackedSends   = 256
-
-	// If an send isn't acknowledged after this period, its connection is
-	// destroyed. There are resends during this period.
-	sendTimeout = 15 * time.Second
 )
 
 var (
@@ -61,13 +57,20 @@ var (
 	sendBufferPool      = sync.Pool{
 		New: func() interface{} { return make([]byte, minMTU) },
 	}
+	// This is the latency we assume on new connections. It should be higher
+	// than the latency we expect on most connections to prevent excessive
+	// resending to peers that take a long time to respond, before we've got a
+	// better idea of their actual latency.
+	initialLatency = 400 * time.Millisecond
+	// If a write isn't acked within this period, destroy the connection.
+	writeTimeout      = 15 * time.Second
+	packetReadTimeout = 2 * time.Minute
 )
 
 type deadlineCallback struct {
 	deadline time.Time
 	timer    *time.Timer
 	callback func()
-	inited   bool
 }
 
 func (me *deadlineCallback) deadlineExceeded() bool {
@@ -521,7 +524,8 @@ func (s *Socket) dispatch(read read) {
 		s.unusedRead(read)
 		return
 	}
-	s.mu.RLock()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
 		recvID = h.ConnID
 		// If a SYN is resent, its connection ID field will be one lower
@@ -531,7 +535,6 @@ func (s *Socket) dispatch(read read) {
 		}
 		return
 	}()}]
-	s.mu.RUnlock()
 	if ok {
 		if h.Type == stSyn {
 			if h.ConnID == c.send_id-2 {
@@ -559,9 +562,7 @@ func (s *Socket) dispatch(read read) {
 			conn_id: h.ConnID,
 			addr:    addr.String(),
 		}
-		s.mu.Lock()
 		s.pushBacklog(syn)
-		s.mu.Unlock()
 		return
 	} else if h.Type != stReset {
 		// This is an unexpected packet. We'll send a reset, but also pass
@@ -647,16 +648,19 @@ func (c *Conn) sendPendingState() {
 	if !c.pendingSendState {
 		return
 	}
-	c.sendState()
+	if c.closed {
+		c.sendReset()
+	} else {
+		c.sendState()
+	}
 }
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
-		socket:         s,
-		remoteAddr:     addr,
-		startTimestamp: nowTimestamp(),
-		created:        time.Now(),
-		packetsIn:      make(chan packet, 100),
+		socket:     s,
+		remoteAddr: addr,
+		created:    time.Now(),
+		packetsIn:  make(chan packet, 100),
 	}
 	c.event.L = &c.mu
 	c.mu.Lock()
@@ -716,11 +720,12 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 	select {
 	case err = <-connErr:
 	case <-timeoutCh:
-		c.Close()
 		err = errTimeout
 	}
 	if err == nil {
 		nc = c
+	} else {
+		c.Close()
 	}
 	return
 }
@@ -811,7 +816,7 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 }
 
 func (s *send) timeoutResend() {
-	if time.Since(s.started) >= sendTimeout {
+	if time.Since(s.started) >= writeTimeout {
 		s.timedOut()
 		return
 	}
@@ -882,8 +887,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 
 func (c *Conn) latency() (ret time.Duration) {
 	if len(c.latencies) == 0 {
-		// Sort of the p95 of latencies?
-		return 200 * time.Millisecond
+		return initialLatency
 	}
 	for _, l := range c.latencies {
 		ret += l
@@ -904,6 +908,10 @@ func (c *Conn) numUnackedSends() (num int) {
 func (c *Conn) sendState() {
 	c.send(stState, c.send_id, nil, c.seq_nr)
 	sentStatePackets.Add(1)
+}
+
+func (c *Conn) sendReset() {
+	c.send(stReset, c.send_id, nil, c.seq_nr)
 }
 
 func seqLess(a, b uint16) bool {
@@ -989,11 +997,7 @@ func (c *Conn) seqSend(seqNr uint16) *send {
 
 func (c *Conn) resendTimeout() time.Duration {
 	l := c.latency()
-	if l < 10*time.Millisecond {
-		l = 10 * time.Millisecond
-	}
 	ret := jitter.Duration(3*l, l)
-	// log.Print(ret)
 	return ret
 }
 
@@ -1022,32 +1026,39 @@ func (c *Conn) deliver(h header, payload []byte) {
 }
 
 func (c *Conn) deliveryProcessor() {
-	for p := range c.packetsIn {
-		c.processDelivery(p.h, p.payload)
-		timeout := time.After(500 * time.Microsecond)
-	batched:
-		for {
-			select {
-			case p, ok := <-c.packetsIn:
-				if !ok {
+	for {
+		select {
+		case p, ok := <-c.packetsIn:
+			if !ok {
+				return
+			}
+			c.processDelivery(p.h, p.payload)
+			timeout := time.After(500 * time.Microsecond)
+		batched:
+			for {
+				select {
+				case p, ok := <-c.packetsIn:
+					if !ok {
+						break batched
+					}
+					c.processDelivery(p.h, p.payload)
+				case <-timeout:
 					break batched
 				}
-				c.processDelivery(p.h, p.payload)
-			case <-timeout:
-				break batched
 			}
+			c.mu.Lock()
+			c.sendPendingState()
+			c.mu.Unlock()
+		case <-time.After(packetReadTimeout):
+			c.mu.Lock()
+			c.destroy(errors.New("no packet read timeout"))
+			c.mu.Unlock()
 		}
-		c.mu.Lock()
-		c.sendPendingState()
-		c.mu.Unlock()
 	}
 }
 
 func (c *Conn) updateStates() {
-	if c.gotFin {
-		c.writeFin()
-	}
-	if c.wroteFin && len(c.unackedSends) == 0 {
+	if c.wroteFin && len(c.unackedSends) == 0 && c.gotFin {
 		c.closed = true
 		c.event.Broadcast()
 	}
@@ -1163,7 +1174,7 @@ func (c *Conn) waitAck(seq uint16) {
 	if send == nil {
 		return
 	}
-	for !send.acked {
+	for !send.acked && !c.closed {
 		c.event.Wait()
 	}
 	return
@@ -1186,16 +1197,17 @@ func (c *Conn) connect() error {
 	if c.err != nil {
 		err = c.err
 	}
+	c.synAcked = true
 	c.event.Broadcast()
 	return err
 }
 
 func (s *Socket) detacher(c *Conn, key connKey) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	for !c.closed {
 		c.event.Wait()
 	}
+	c.mu.Unlock()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.conns[key] != c {
@@ -1281,8 +1293,6 @@ func (s *Socket) Addr() net.Addr {
 	return s.pc.LocalAddr()
 }
 
-// Marks the Socket for close. Currently this just axes the underlying OS
-// socket.
 func (s *Socket) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -1323,6 +1333,7 @@ func (c *Conn) writeFin() (err error) {
 	}
 	_, err = c.write(stFin, c.send_id, nil, c.seq_nr)
 	if err != nil {
+		log.Print(err)
 		return
 	}
 	c.wroteFin = true
@@ -1348,10 +1359,17 @@ func (c *Conn) Close() (err error) {
 	if err != nil {
 		return
 	}
-	for !c.closed && !c.gotFin {
+	for {
+		if c.wroteFin && len(c.unackedSends) <= 1 {
+			// Sent FIN and it's the only thing unacked.
+			break
+		}
+		if c.closed {
+			err = c.err
+			break
+		}
 		c.event.Wait()
 	}
-	err = c.err
 	return
 }
 
@@ -1366,15 +1384,14 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		if len(c.readBuf) != 0 {
 			break
 		}
-		if c.gotFin || (c.wroteFin && len(c.unackedSends) == 0) {
+		if c.gotFin {
 			err = io.EOF
 			return
 		}
 		if c.closed {
-			err = errClosed
-			return
-		}
-		if c.err != nil {
+			if c.err == nil {
+				panic("closed without receiving fin, and no error")
+			}
 			err = c.err
 			return
 		}
@@ -1407,16 +1424,16 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 				err = io.ErrClosedPipe
 				return
 			}
+			if c.connDeadlines.write.deadlineExceeded() {
+				err = errTimeout
+				return
+			}
 			// If peerWndSize is 0, we still want to send something, so don't
 			// block until we exceed it.
 			if c.synAcked &&
 				len(c.unackedSends) < maxUnackedSends &&
 				c.cur_window <= c.peerWndSize {
 				break
-			}
-			if c.connDeadlines.write.deadlineExceeded() {
-				err = errTimeout
-				return
 			}
 			c.event.Wait()
 		}

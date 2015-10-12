@@ -19,6 +19,8 @@ import (
 
 func init() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
+	writeTimeout = 1 * time.Second
+	initialLatency = 10 * time.Millisecond
 }
 
 func TestUTPPingPong(t *testing.T) {
@@ -94,7 +96,6 @@ func TestMinMaxHeaderType(t *testing.T) {
 }
 
 func TestUTPRawConn(t *testing.T) {
-	t.Parallel()
 	l, err := NewSocket("udp", "")
 	require.NoError(t, err)
 	defer l.Close()
@@ -204,13 +205,13 @@ func TestConnReadDeadline(t *testing.T) {
 	case <-time.After(time.Millisecond):
 	}
 	c.Close()
+	if err := <-dcReadErr; err != io.EOF {
+		t.Fatalf("dial conn read returned %s", err)
+	}
 	select {
 	case <-readReturned:
 	case <-time.After(time.Millisecond):
 		t.Fatal("read should return after Conn is closed")
-	}
-	if err := <-dcReadErr; err != io.EOF {
-		t.Fatalf("dial conn read returned %s", err)
 	}
 }
 
@@ -459,4 +460,14 @@ func TestConnCloseUnclosedSocket(t *testing.T) {
 			}
 		}()
 	}
+}
+
+func TestAcceptGone(t *testing.T) {
+	s, _ := NewSocket("udp", "localhost:0")
+	_, err := DialTimeout(s.Addr().String(), time.Millisecond)
+	require.Error(t, err)
+	c, _ := s.Accept()
+	c.SetReadDeadline(time.Now().Add(time.Millisecond))
+	c.Read(nil)
+	// select {}
 }
