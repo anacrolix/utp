@@ -27,7 +27,7 @@ function other_ucat() {
 }
 
 function md5cmd() {
-	(which -s md5sum && md5sum "$@") || (which -s md5 && md5 "$@") || md5sum "$@"
+	(which md5sum > /dev/null && md5sum "$@") || (which md5 > /dev/null && md5 "$@") || md5sum "$@"
 }
 
 # Check what the correct result is.
