@@ -21,6 +21,7 @@ func init() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 	writeTimeout = 1 * time.Second
 	initialLatency = 10 * time.Millisecond
+	packetReadTimeout = 2 * time.Second
 }
 
 func TestUTPPingPong(t *testing.T) {
@@ -470,4 +471,14 @@ func TestAcceptGone(t *testing.T) {
 	c.SetReadDeadline(time.Now().Add(time.Millisecond))
 	c.Read(nil)
 	// select {}
+}
+
+func TestPacketReadTimeout(t *testing.T) {
+	t.Parallel()
+	a, b := connPair()
+	_, err := a.Read(nil)
+	require.Contains(t, err.Error(), "timeout")
+	t.Log(err)
+	t.Log(a.Close())
+	t.Log(b.Close())
 }
