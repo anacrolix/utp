@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"os"
@@ -1026,7 +1027,9 @@ func (c *Conn) deliver(h header, payload []byte) {
 }
 
 func (c *Conn) deliveryProcessor() {
+	timeout := time.NewTimer(math.MaxInt64)
 	for {
+		timeout.Reset(packetReadTimeout)
 		select {
 		case p, ok := <-c.packetsIn:
 			if !ok {
@@ -1049,7 +1052,7 @@ func (c *Conn) deliveryProcessor() {
 			c.mu.Lock()
 			c.sendPendingState()
 			c.mu.Unlock()
-		case <-time.After(packetReadTimeout):
+		case <-timeout.C:
 			c.mu.Lock()
 			c.destroy(errors.New("no packet read timeout"))
 			c.mu.Unlock()
