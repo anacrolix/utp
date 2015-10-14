@@ -823,7 +823,7 @@ func (s *send) timeoutResend() {
 	}
 	s.conn.mu.Lock()
 	defer s.conn.mu.Unlock()
-	if s.acked {
+	if s.acked || s.conn.closed {
 		return
 	}
 	rt := s.conn.resendTimeout()
@@ -832,15 +832,15 @@ func (s *send) timeoutResend() {
 	s.resendTimer.Reset(rt * time.Duration(s.numResends))
 }
 
-func (me *Conn) writeSyn() (err error) {
+func (me *Conn) writeSyn() {
 	if me.sentSyn {
 		panic("already sent syn")
 	}
-	_, err = me.write(stSyn, me.recv_id, nil, me.seq_nr)
+	me.write(stSyn, me.recv_id, nil, me.seq_nr)
 	return
 }
 
-func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
+func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n int) {
 	switch _type {
 	case stSyn, stFin, stData:
 	default:
@@ -852,8 +852,9 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	if len(payload) > maxPayloadSize {
 		payload = payload[:maxPayloadSize]
 	}
-	err = c.send(_type, connID, payload, seqNr)
+	err := c.send(_type, connID, payload, seqNr)
 	if err != nil {
+		c.destroy(fmt.Errorf("error sending packet: %s", err))
 		return
 	}
 	n = len(payload)
@@ -1183,14 +1184,11 @@ func (c *Conn) waitAck(seq uint16) {
 	return
 }
 
-func (c *Conn) connect() error {
+func (c *Conn) connect() (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.seq_nr = 1
-	err := c.writeSyn()
-	if err != nil {
-		return err
-	}
+	c.writeSyn()
 	c.sentSyn = true
 	if logLevel >= 2 {
 		log.Printf("sent syn")
@@ -1330,15 +1328,11 @@ func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
 	return s.pc.WriteTo(b, addr)
 }
 
-func (c *Conn) writeFin() (err error) {
+func (c *Conn) writeFin() {
 	if c.wroteFin {
 		return
 	}
-	_, err = c.write(stFin, c.send_id, nil, c.seq_nr)
-	if err != nil {
-		log.Print(err)
-		return
-	}
+	c.write(stFin, c.send_id, nil, c.seq_nr)
 	c.wroteFin = true
 	c.event.Broadcast()
 	return
@@ -1356,12 +1350,9 @@ func (c *Conn) destroy(reason error) {
 func (c *Conn) Close() (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	err = c.writeFin()
 	c.closing = true
 	c.event.Broadcast()
-	if err != nil {
-		return
-	}
+	c.writeFin()
 	for {
 		if c.wroteFin && len(c.unackedSends) <= 1 {
 			// Sent FIN and it's the only thing unacked.
@@ -1441,10 +1432,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 			c.event.Wait()
 		}
 		var n1 int
-		n1, err = c.write(stData, c.send_id, p, c.seq_nr)
-		if err != nil {
-			return
-		}
+		n1 = c.write(stData, c.send_id, p, c.seq_nr)
 		// c.seq_nr++
 		n += n1
 		p = p[n1:]
