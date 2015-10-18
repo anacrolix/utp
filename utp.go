@@ -453,9 +453,11 @@ func (s *Socket) reader() {
 		}
 		n, addr, err := s.pc.ReadFrom(b[:])
 		if err != nil {
+			s.mu.Lock()
 			if !s.closing {
 				s.ReadErr = err
 			}
+			s.mu.Unlock()
 			return
 		}
 		var nilB []byte
