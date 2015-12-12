@@ -1345,12 +1345,11 @@ func (c *Conn) writeFin() {
 }
 
 func (c *Conn) destroy(reason error) {
-	if c.closed {
-		return
-	}
 	c.closed = true
 	c.event.Broadcast()
-	c.err = reason
+	if c.err == nil {
+		c.err = reason
+	}
 }
 
 func (c *Conn) Close() (err error) {
