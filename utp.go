@@ -184,6 +184,7 @@ type header struct {
 
 var (
 	mu                         sync.RWMutex
+	sockets                    []*Socket
 	logLevel                   = 0
 	artificialPacketDropChance = 0.0
 )
@@ -424,6 +425,9 @@ func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 
 		unusedReads: make(chan read, 100),
 	}
+	mu.Lock()
+	sockets = append(sockets, s)
+	mu.Unlock()
 	s.event.L = &s.mu
 	go s.reader()
 	go s.dispatcher()
