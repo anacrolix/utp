@@ -1043,6 +1043,8 @@ func (c *Conn) deliveryProcessor() {
 				return
 			}
 			c.processDelivery(p.h, p.payload)
+			// Process a batch if they arrive in quick succession without
+			// acking them until there's a pause.
 			timeout := time.After(500 * time.Microsecond)
 		batched:
 			for {
