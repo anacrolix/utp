@@ -7,12 +7,12 @@ import (
 	"log"
 	"net"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/anacrolix/envpprof"
-	"github.com/anacrolix/missinggo"
 	"github.com/bradfitz/iter"
 	"github.com/stretchr/testify/require"
 )
@@ -113,7 +113,7 @@ func TestUTPRawConn(t *testing.T) {
 	utpPeer := func() net.Conn {
 		s, _ := NewSocket("udp", "")
 		defer s.Close()
-		ret, err := s.Dial(fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
+		ret, err := s.Dial(fmt.Sprintf("localhost:%d", AddrPort(l.Addr())))
 		require.NoError(t, err)
 		return ret
 	}()
@@ -148,7 +148,7 @@ func TestUTPRawConn(t *testing.T) {
 			}
 		}
 	}()
-	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
+	udpAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("localhost:%d", AddrPort(l.Addr())))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -481,4 +481,22 @@ func TestPacketReadTimeout(t *testing.T) {
 	t.Log(err)
 	t.Log(a.Close())
 	t.Log(b.Close())
+}
+
+// Extracts the port as an integer from an address string.
+func AddrPort(addr net.Addr) int {
+	switch raw := addr.(type) {
+	case *net.UDPAddr:
+		return raw.Port
+	default:
+		_, port, err := net.SplitHostPort(addr.String())
+		if err != nil {
+			panic(err)
+		}
+		i64, err := strconv.ParseInt(port, 0, 0)
+		if err != nil {
+			panic(err)
+		}
+		return int(i64)
+	}
 }
