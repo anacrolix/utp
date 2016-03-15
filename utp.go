@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/anacrolix/missinggo"
+	"github.com/anacrolix/missinggo/pproffd"
 )
 
 const (
@@ -730,11 +731,11 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 	case <-timeoutCh:
 		err = errTimeout
 	}
-	if err == nil {
-		nc = c
-	} else {
+	if err != nil {
 		c.Close()
+		return
 	}
+	nc = pproffd.WrapNetConn(c)
 	return
 }
 
