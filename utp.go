@@ -25,7 +25,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/anacrolix/jitter"
+	"github.com/anacrolix/missinggo"
 )
 
 const (
@@ -1004,7 +1004,7 @@ func (c *Conn) seqSend(seqNr uint16) *send {
 
 func (c *Conn) resendTimeout() time.Duration {
 	l := c.latency()
-	ret := jitter.Duration(3*l, l)
+	ret := missinggo.JitterDuration(3*l, l)
 	return ret
 }
 
