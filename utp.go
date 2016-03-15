@@ -372,7 +372,7 @@ type Conn struct {
 type send struct {
 	acked       bool // Closed with Conn lock.
 	payloadSize uint32
-	started     time.Time
+	started     missinggo.MonotonicTime
 	// This send was skipped in a selective ack.
 	resend   func()
 	timedOut func()
@@ -383,6 +383,8 @@ type send struct {
 	numResends  int
 }
 
+// first is true if this is the first time the send is acked. latency is
+// calculated for the first ack.
 func (s *send) Ack() (latency time.Duration, first bool) {
 	s.resendTimer.Stop()
 	if s.acked {
@@ -391,7 +393,7 @@ func (s *send) Ack() (latency time.Duration, first bool) {
 	s.acked = true
 	s.conn.event.Broadcast()
 	first = true
-	latency = time.Since(s.started)
+	latency = missinggo.MonotonicSince(s.started)
 	return
 }
 
@@ -822,7 +824,7 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 }
 
 func (s *send) timeoutResend() {
-	if time.Since(s.started) >= writeTimeout {
+	if missinggo.MonotonicSince(s.started) >= writeTimeout {
 		s.timedOut()
 		return
 	}
@@ -869,7 +871,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	}
 	send := &send{
 		payloadSize: uint32(len(payload)),
-		started:     time.Now(),
+		started:     missinggo.MonotonicNow(),
 		resend: func() {
 			c.mu.Lock()
 			err := c.send(_type, connID, payload, seqNr)
