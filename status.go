@@ -18,7 +18,7 @@ func writeSocketStatus(w io.Writer, s *Socket) {
 	fmt.Fprintf(w, "%s\n", s.pc)
 	fmt.Fprintf(w, "%d attached conns\n", len(s.conns))
 	fmt.Fprintf(w, "backlog: %d\n", len(s.backlog))
-	fmt.Fprintf(w, "closing: %v\n", s.closing)
+	fmt.Fprintf(w, "closed: %v\n", s.closed.IsSet())
 	fmt.Fprintf(w, "unused reads: %d\n", len(s.unusedReads))
 	fmt.Fprintf(w, "readerr: %v\n", s.ReadErr)
 }

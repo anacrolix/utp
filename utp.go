@@ -135,13 +135,15 @@ type connKey struct {
 // A Socket wraps a net.PacketConn, diverting uTP packets to its child uTP
 // Conns.
 type Socket struct {
-	mu      sync.RWMutex
-	event   sync.Cond
-	pc      net.PacketConn
-	conns   map[connKey]*Conn
-	backlog map[syn]struct{}
-	reads   chan read
-	closing bool
+	mu    sync.RWMutex
+	pc    net.PacketConn
+	conns map[connKey]*Conn
+
+	backlogNotEmpty missinggo.Event
+	backlog         map[syn]struct{}
+
+	reads  chan read
+	closed missinggo.Event
 
 	unusedReads chan read
 	connDeadlines
@@ -430,7 +432,6 @@ func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	mu.Lock()
 	sockets = append(sockets, s)
 	mu.Unlock()
-	s.event.L = &s.mu
 	go s.reader()
 	go s.dispatcher()
 	return
@@ -460,7 +461,7 @@ func (s *Socket) reader() {
 		n, addr, err := s.pc.ReadFrom(b[:])
 		if err != nil {
 			s.mu.Lock()
-			if !s.closing {
+			if !s.closed.IsSet() {
 				s.ReadErr = err
 			}
 			s.mu.Unlock()
@@ -502,7 +503,7 @@ func (s *Socket) pushBacklog(syn syn) {
 		s.reset(stringAddr(k.addr), k.seq_nr, k.conn_id)
 	}
 	s.backlog[syn] = struct{}{}
-	s.event.Broadcast()
+	s.backlogChanged()
 }
 
 func (s *Socket) dispatcher() {
@@ -1224,8 +1225,7 @@ func (s *Socket) detacher(c *Conn, key connKey) {
 	}
 	delete(s.conns, key)
 	close(c.packetsIn)
-	s.event.Broadcast()
-	if s.closing {
+	if s.closed.IsSet() {
 		s.teardown()
 	}
 }
@@ -1244,20 +1244,33 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 	return true
 }
 
+func (s *Socket) backlogChanged() {
+	if len(s.backlog) != 0 {
+		s.backlogNotEmpty.Set()
+	} else {
+		s.backlogNotEmpty.Clear()
+	}
+}
+
 func (s *Socket) nextSyn() (syn syn, ok bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	for {
-		if s.closing {
+		select {
+		case <-s.closed.C():
 			return
+		case <-s.backlogNotEmpty.C():
+			s.mu.Lock()
+			for k := range s.backlog {
+				syn = k
+				delete(s.backlog, k)
+				ok = true
+				break
+			}
+			s.backlogChanged()
+			s.mu.Unlock()
+			if ok {
+				return
+			}
 		}
-		for k := range s.backlog {
-			syn = k
-			delete(s.backlog, k)
-			ok = true
-			return
-		}
-		s.event.Wait()
 	}
 }
 
@@ -1305,17 +1318,15 @@ func (s *Socket) Addr() net.Addr {
 func (s *Socket) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.closing = true
-	s.event.Broadcast()
+	s.closed.Set()
 	return s.teardown()
 }
 
-func (s *Socket) teardown() (err error) {
+func (s *Socket) teardown() error {
 	if len(s.conns) == 0 {
-		s.event.Broadcast()
-		err = s.pc.Close()
+		return s.pc.Close()
 	}
-	return
+	return nil
 }
 
 func (s *Socket) LocalAddr() net.Addr {
