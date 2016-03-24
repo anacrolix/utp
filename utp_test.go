@@ -260,12 +260,7 @@ func connectSelfLots(n int, t testing.TB) {
 			c.Close()
 		}
 	}
-	s.mu.Lock()
-	for len(s.conns) != 0 {
-		// log.Print(len(s.conns))
-		s.event.Wait()
-	}
-	s.mu.Unlock()
+	sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
 	s.Close()
 }
 
@@ -313,11 +308,7 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 	for range iter.N(backlog + 1) {
 		go dial()
 	}
-	s.mu.Lock()
-	for len(s.backlog) < backlog {
-		s.event.Wait()
-	}
-	s.mu.Unlock()
+	sleepWhile(&s.mu, func() bool { return len(s.backlog) < backlog })
 	select {
 	case <-errChan:
 		t.FailNow()
@@ -409,12 +400,7 @@ func TestCloseDetachesQuickly(t *testing.T) {
 	}()
 	b, _ := s.Accept()
 	b.Close()
-	s.mu.Lock()
-	for len(s.conns) != 0 {
-		log.Print(len(s.conns))
-		s.event.Wait()
-	}
-	s.mu.Unlock()
+	sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
 }
 
 // Check that closing, and resulting detach of a Conn doesn't close the parent
@@ -453,13 +439,7 @@ func TestConnCloseUnclosedSocket(t *testing.T) {
 		}()
 		dialerSync <- struct{}{}
 		require.NoError(t, a.Close())
-		func() {
-			s.mu.Lock()
-			defer s.mu.Unlock()
-			for len(s.conns) != 0 {
-				s.event.Wait()
-			}
-		}()
+		sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
 	}
 }
 
@@ -481,4 +461,16 @@ func TestPacketReadTimeout(t *testing.T) {
 	t.Log(err)
 	t.Log(a.Close())
 	t.Log(b.Close())
+}
+
+func sleepWhile(l sync.Locker, cond func() bool) {
+	for {
+		l.Lock()
+		val := cond()
+		l.Unlock()
+		if !val {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
