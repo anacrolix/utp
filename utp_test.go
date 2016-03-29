@@ -447,13 +447,20 @@ func TestConnCloseUnclosedSocket(t *testing.T) {
 }
 
 func TestAcceptGone(t *testing.T) {
-	s, _ := NewSocket("udp", "localhost:0")
-	_, err := DialTimeout(s.Addr().String(), time.Millisecond)
+	defer sleepWhile(&mu, func() bool { return len(sockets) != 0 })
+	s, err := NewSocket("udp", "localhost:0")
+	require.NoError(t, err)
+	defer s.Close()
+	_, err = DialTimeout(s.Addr().String(), time.Millisecond)
 	require.Error(t, err)
-	c, _ := s.Accept()
-	c.SetReadDeadline(time.Now().Add(time.Millisecond))
-	c.Read(nil)
-	// select {}
+	// Will succeed because we don't signal that we give up dialing, or check
+	// that the handshake is completed before returning the new Conn.
+	c, err := s.Accept()
+	require.NoError(t, err)
+	defer c.Close()
+	err = c.SetReadDeadline(time.Now().Add(time.Millisecond))
+	_, err = c.Read(nil)
+	require.EqualError(t, err, "i/o timeout")
 }
 
 func TestPacketReadTimeout(t *testing.T) {
