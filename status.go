@@ -8,7 +8,7 @@ import (
 func WriteStatus(w io.Writer) {
 	mu.RLock()
 	defer mu.RUnlock()
-	for _, s := range sockets {
+	for s := range sockets {
 		writeSocketStatus(w, s)
 		fmt.Fprintf(w, "\n")
 	}

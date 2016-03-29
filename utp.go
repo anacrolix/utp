@@ -186,7 +186,7 @@ type header struct {
 
 var (
 	mu                         sync.RWMutex
-	sockets                    []*Socket
+	sockets                    = map[*Socket]struct{}{}
 	logLevel                   = 0
 	artificialPacketDropChance = 0.0
 )
@@ -430,7 +430,7 @@ func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 		unusedReads: make(chan read, 100),
 	}
 	mu.Lock()
-	sockets = append(sockets, s)
+	sockets[s] = struct{}{}
 	mu.Unlock()
 	go s.reader()
 	go s.dispatcher()
@@ -1324,6 +1324,9 @@ func (s *Socket) Close() error {
 
 func (s *Socket) teardown() error {
 	if len(s.conns) == 0 {
+		mu.Lock()
+		delete(sockets, s)
+		mu.Unlock()
 		return s.pc.Close()
 	}
 	return nil
