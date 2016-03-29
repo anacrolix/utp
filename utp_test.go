@@ -6,6 +6,8 @@ import (
 	"io/ioutil"
 	"log"
 	"net"
+	"net/http"
+	"os"
 	"runtime"
 	"sync"
 	"testing"
@@ -14,6 +16,7 @@ import (
 	_ "github.com/anacrolix/envpprof"
 	"github.com/anacrolix/missinggo"
 	"github.com/bradfitz/iter"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -219,9 +222,7 @@ func TestConnReadDeadline(t *testing.T) {
 func connectSelfLots(n int, t testing.TB) {
 	defer goroutineLeakCheck(t)()
 	s, err := NewSocket("udp", "localhost:0")
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	go func() {
 		for range iter.N(n) {
 			c, err := s.Accept()
@@ -411,7 +412,7 @@ func TestConnCloseUnclosedSocket(t *testing.T) {
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	defer func() {
-		require.NoError(t, s.Close())
+		assert.NoError(t, s.Close())
 	}()
 	// Prevents the dialing goroutine from closing its end of the Conn before
 	// we can check that it has been registered in the listener.
