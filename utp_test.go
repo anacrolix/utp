@@ -300,30 +300,30 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	errChan := make(chan error, 1)
+	errChan := make(chan error)
 	dial := func() {
 		_, err := s.Dial(s.Addr().String())
-		if err != nil {
-			errChan <- err
-		}
+		require.Error(t, err)
+		errChan <- err
 	}
 	// Fill the backlog.
-	for range iter.N(backlog + 1) {
+	for range iter.N(backlog) {
 		go dial()
 	}
 	sleepWhile(&s.mu, func() bool { return len(s.backlog) < backlog })
 	select {
-	case <-errChan:
-		t.FailNow()
+	case err := <-errChan:
+		t.Fatalf("got premature error: %s", err)
 	default:
 	}
 	// One more connection should cause a dial attempt to get reset.
 	go dial()
 	err = <-errChan
-	if err.Error() != "peer reset" {
-		t.FailNow()
-	}
+	assert.EqualError(t, err, "peer reset")
 	s.Close()
+	for range iter.N(backlog) {
+		<-errChan
+	}
 }
 
 // Make sure that we can reset AfterFunc timers, so we don't have to create
