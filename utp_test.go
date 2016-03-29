@@ -474,3 +474,18 @@ func sleepWhile(l sync.Locker, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+func TestMain(m *testing.M) {
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		WriteStatus(w)
+	})
+	code := m.Run()
+	WriteStatus(os.Stderr)
+	mu.Lock()
+	numSockets := len(sockets)
+	mu.Unlock()
+	if numSockets != 0 {
+		code = 1
+	}
+	os.Exit(code)
+}
