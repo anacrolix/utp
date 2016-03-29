@@ -175,7 +175,9 @@ func TestUTPRawConn(t *testing.T) {
 func TestConnReadDeadline(t *testing.T) {
 	t.Parallel()
 	ls, _ := NewSocket("udp", "localhost:0")
+	defer ls.Close()
 	ds, _ := NewSocket("udp", "localhost:0")
+	defer ds.Close()
 	dcReadErr := make(chan error)
 	go func() {
 		c, _ := ds.Dial(ls.Addr().String())

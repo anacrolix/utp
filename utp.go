@@ -608,6 +608,7 @@ func DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
 	if err != nil {
 		return
 	}
+	defer s.Close()
 	return s.DialTimeout(addr, timeout)
 
 }
