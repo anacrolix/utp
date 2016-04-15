@@ -1021,6 +1021,9 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 		return
 	}
 	send.acksSkipped++
+	if send.resend == nil {
+		return
+	}
 	switch send.acksSkipped {
 	case 3, 60:
 		ackSkippedResends.Add(1)
