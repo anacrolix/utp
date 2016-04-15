@@ -9,13 +9,15 @@ func WriteStatus(w io.Writer) {
 	mu.RLock()
 	defer mu.RUnlock()
 	for s := range sockets {
+		s.mu.Lock()
 		writeSocketStatus(w, s)
+		s.mu.Unlock()
 		fmt.Fprintf(w, "\n")
 	}
 }
 
 func writeSocketStatus(w io.Writer, s *Socket) {
-	fmt.Fprintf(w, "%s\n", s.pc)
+	fmt.Fprintf(w, "%s\n", s.pc.LocalAddr())
 	fmt.Fprintf(w, "%d attached conns\n", len(s.conns))
 	fmt.Fprintf(w, "backlog: %d\n", len(s.backlog))
 	fmt.Fprintf(w, "closed: %v\n", s.closed.IsSet())
