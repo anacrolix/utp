@@ -958,10 +958,8 @@ func (c *Conn) ack(nr uint16) {
 			c.latencies = c.latencies[len(c.latencies)-10:]
 		}
 	}
-	for {
-		if len(c.unackedSends) == 0 {
-			break
-		}
+	// Trim sends that aren't needed anymore.
+	for len(c.unackedSends) != 0 {
 		if !c.unackedSends[0].acked {
 			// Can't trim unacked sends any further.
 			return
