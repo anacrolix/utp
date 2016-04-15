@@ -389,14 +389,18 @@ type send struct {
 // first is true if this is the first time the send is acked. latency is
 // calculated for the first ack.
 func (s *send) Ack() (latency time.Duration, first bool) {
-	s.resendTimer.Stop()
-	if s.acked {
-		return
+	first = !s.acked
+	if first {
+		latency = missinggo.MonotonicSince(s.started)
 	}
 	s.acked = true
 	s.conn.event.Broadcast()
-	first = true
-	latency = missinggo.MonotonicSince(s.started)
+	s.resend = nil
+	s.timedOut = nil
+	if s.resendTimer != nil {
+		s.resendTimer.Stop()
+		s.resendTimer = nil
+	}
 	return
 }
 
