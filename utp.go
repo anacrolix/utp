@@ -1299,7 +1299,9 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 			if _c.send_id != syn.conn_id {
 				panic(":|")
 			}
+			_c.mu.Lock()
 			_c.sendState()
+			_c.mu.Unlock()
 			s.mu.Unlock()
 			continue
 		}
