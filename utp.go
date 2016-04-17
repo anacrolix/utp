@@ -377,9 +377,8 @@ type send struct {
 	payloadSize uint32
 	started     missinggo.MonotonicTime
 	// This send was skipped in a selective ack.
-	resend   func()
-	timedOut func()
-	conn     *Conn
+	resend func()
+	conn   *Conn
 
 	acksSkipped int
 	resendTimer *time.Timer
@@ -396,7 +395,6 @@ func (s *send) Ack() (latency time.Duration, first bool) {
 	s.acked = true
 	s.conn.event.Broadcast()
 	s.resend = nil
-	s.timedOut = nil
 	if s.resendTimer != nil {
 		s.resendTimer.Stop()
 		s.resendTimer = nil
@@ -830,13 +828,17 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 	return
 }
 
+func (s *send) timedOut() {
+	s.conn.destroy(errAckTimeout)
+}
+
 func (s *send) timeoutResend() {
+	s.conn.mu.Lock()
+	defer s.conn.mu.Unlock()
 	if missinggo.MonotonicSince(s.started) >= writeTimeout {
 		s.timedOut()
 		return
 	}
-	s.conn.mu.Lock()
-	defer s.conn.mu.Unlock()
 	if s.acked || s.conn.closed {
 		return
 	}
@@ -885,11 +887,6 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 			if err != nil {
 				log.Printf("error resending packet: %s", err)
 			}
-			c.mu.Unlock()
-		},
-		timedOut: func() {
-			c.mu.Lock()
-			c.destroy(errAckTimeout)
 			c.mu.Unlock()
 		},
 		conn: c,
