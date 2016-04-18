@@ -269,7 +269,6 @@ func connectSelfLots(n int, t testing.TB) {
 
 // Connect to ourself heaps.
 func TestConnectSelf(t *testing.T) {
-	t.Parallel()
 	// A rough guess says that at worst, I can only have 0x10000/3 connections
 	// to the same socket, due to fragmentation in the assigned connection
 	// IDs.
