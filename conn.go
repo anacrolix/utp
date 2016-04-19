@@ -284,7 +284,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 		return
 	}
 	send.acksSkipped++
-	if send.resend == nil {
+	if send.acked {
 		return
 	}
 	switch send.acksSkipped {
