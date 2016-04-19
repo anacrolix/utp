@@ -524,9 +524,11 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 	defer mu.Unlock()
 	for {
 		if len(c.readBuf) != 0 {
-			break
+			n = copy(b, c.readBuf)
+			c.readBuf = c.readBuf[n:]
+			return
 		}
-		if c.gotFin {
+		if c.gotFin || c.closed {
 			err = io.EOF
 			return
 		}
@@ -543,10 +545,6 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		}
 		cond.Wait()
 	}
-	n = copy(b, c.readBuf)
-	c.readBuf = c.readBuf[n:]
-
-	return
 }
 
 func (c *Conn) RemoteAddr() net.Addr {
