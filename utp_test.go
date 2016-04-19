@@ -263,7 +263,7 @@ func connectSelfLots(n int, t testing.TB) {
 			c.Close()
 		}
 	}
-	sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
+	sleepWhile(&mu, func() bool { return len(s.conns) != 0 })
 	s.Close()
 }
 
@@ -309,7 +309,7 @@ func TestRejectDialBacklogFilled(t *testing.T) {
 	for range iter.N(backlog) {
 		go dial()
 	}
-	sleepWhile(&s.mu, func() bool { return len(s.backlog) < backlog })
+	sleepWhile(&mu, func() bool { return len(s.backlog) < backlog })
 	select {
 	case err := <-errChan:
 		t.Fatalf("got premature error: %s", err)
@@ -402,7 +402,7 @@ func TestCloseDetachesQuickly(t *testing.T) {
 	}()
 	b, _ := s.Accept()
 	b.Close()
-	sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
+	sleepWhile(&mu, func() bool { return len(s.conns) != 0 })
 }
 
 // Check that closing, and resulting detach of a Conn doesn't close the parent
@@ -435,13 +435,13 @@ func TestConnCloseUnclosedSocket(t *testing.T) {
 		// test failure exception is thrown. "Do as we say, not as we do" -Go
 		// team.
 		func() {
-			s.mu.Lock()
-			defer s.mu.Unlock()
+			mu.Lock()
+			defer mu.Unlock()
 			require.Len(t, s.conns, 1)
 		}()
 		dialerSync <- struct{}{}
 		require.NoError(t, a.Close())
-		sleepWhile(&s.mu, func() bool { return len(s.conns) != 0 })
+		sleepWhile(&mu, func() bool { return len(s.conns) != 0 })
 	}
 }
 

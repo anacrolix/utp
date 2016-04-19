@@ -6,7 +6,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -28,7 +27,6 @@ type connKey struct {
 // A Socket wraps a net.PacketConn, diverting uTP packets to its child uTP
 // Conns.
 type Socket struct {
-	mu    sync.RWMutex
 	pc    net.PacketConn
 	conns map[connKey]*Conn
 
@@ -125,11 +123,11 @@ func (s *Socket) reader() {
 		}
 		n, addr, err := s.pc.ReadFrom(b[:])
 		if err != nil {
-			s.mu.Lock()
+			mu.Lock()
 			if !s.closed.IsSet() {
 				s.ReadErr = err
 			}
-			s.mu.Unlock()
+			mu.Unlock()
 			return
 		}
 		var nilB []byte
@@ -149,8 +147,8 @@ func (s *Socket) dispatch(read read) {
 		s.unusedRead(read)
 		return
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
 		recvID = h.ConnID
 		// If a SYN is resent, its connection ID field will be one lower
@@ -260,19 +258,16 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		created:    time.Now(),
 		packetsIn:  make(chan packet, 100),
 	}
-	c.event.L = &c.mu
-	c.mu.Lock()
 	c.connDeadlines.read.setCallback(func() {
-		c.mu.Lock()
-		c.event.Broadcast()
-		c.mu.Unlock()
+		mu.Lock()
+		cond.Broadcast()
+		mu.Unlock()
 	})
 	c.connDeadlines.write.setCallback(func() {
-		c.mu.Lock()
-		c.event.Broadcast()
-		c.mu.Unlock()
+		mu.Lock()
+		cond.Broadcast()
+		mu.Unlock()
 	})
-	c.mu.Unlock()
 	go c.deliveryProcessor()
 	return
 }
@@ -287,7 +282,7 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 		return
 	}
 
-	s.mu.Lock()
+	mu.Lock()
 	c := s.newConn(netAddr)
 	c.recv_id = s.newConnID(resolvedAddrStr(netAddr.String()))
 	c.send_id = c.recv_id + 1
@@ -302,7 +297,7 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 		}
 		log.Printf("that's %d connections", len(s.conns))
 	}
-	s.mu.Unlock()
+	mu.Unlock()
 	if err != nil {
 		return
 	}
@@ -329,9 +324,7 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 }
 
 func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
-	mu.RLock()
 	apdc := artificialPacketDropChance
-	mu.RUnlock()
 	if apdc != 0 {
 		if rand.Float64() < apdc {
 			n = len(b)
@@ -343,13 +336,11 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 }
 
 func (s *Socket) detacher(c *Conn, key connKey) {
-	c.mu.Lock()
+	mu.Lock()
+	defer mu.Unlock()
 	for !c.closed {
-		c.event.Wait()
+		cond.Wait()
 	}
-	c.mu.Unlock()
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.conns[key] != c {
 		panic("conn changed")
 	}
@@ -388,7 +379,7 @@ func (s *Socket) nextSyn() (syn syn, ok bool) {
 		case <-s.closed.C():
 			return
 		case <-s.backlogNotEmpty.C():
-			s.mu.Lock()
+			mu.Lock()
 			for k := range s.backlog {
 				syn = k
 				delete(s.backlog, k)
@@ -396,7 +387,7 @@ func (s *Socket) nextSyn() (syn syn, ok bool) {
 				break
 			}
 			s.backlogChanged()
-			s.mu.Unlock()
+			mu.Unlock()
 			if ok {
 				return
 			}
@@ -412,7 +403,7 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 			err = errClosed
 			return
 		}
-		s.mu.Lock()
+		mu.Lock()
 		_c := s.newConn(stringAddr(syn.addr))
 		_c.send_id = syn.conn_id
 		_c.recv_id = _c.send_id + 1
@@ -428,16 +419,14 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 			if _c.send_id != syn.conn_id {
 				panic(":|")
 			}
-			_c.mu.Lock()
 			_c.sendState()
-			_c.mu.Unlock()
-			s.mu.Unlock()
+			mu.Unlock()
 			continue
 		}
 		_c.sendState()
 		// _c.seq_nr++
 		c = _c
-		s.mu.Unlock()
+		mu.Unlock()
 		return
 	}
 }
@@ -448,17 +437,15 @@ func (s *Socket) Addr() net.Addr {
 }
 
 func (s *Socket) Close() error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	s.closed.Set()
 	return s.teardown()
 }
 
 func (s *Socket) teardown() error {
 	if len(s.conns) == 0 {
-		mu.Lock()
 		delete(sockets, s)
-		mu.Unlock()
 		return s.pc.Close()
 	}
 	return nil

@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -15,9 +14,6 @@ import (
 // Conn is a uTP stream and implements net.Conn. It owned by a Socket, which
 // handles dispatching packets to and from Conns.
 type Conn struct {
-	mu    sync.Mutex
-	event sync.Cond
-
 	recv_id, send_id uint16
 	seq_nr, ack_nr   uint16
 	lastAck          uint16
@@ -178,12 +174,12 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 		payloadSize: uint32(len(payload)),
 		started:     missinggo.MonotonicNow(),
 		resend: func() {
-			c.mu.Lock()
+			mu.Lock()
 			err := c.send(_type, connID, payload, seqNr)
 			if err != nil {
 				log.Printf("error resending packet: %s", err)
 			}
-			c.mu.Unlock()
+			mu.Unlock()
 		},
 		conn: c,
 	}
@@ -253,7 +249,7 @@ func (c *Conn) ack(nr uint16) {
 		c.unackedSends = c.unackedSends[1:]
 		c.lastAck++
 	}
-	c.event.Broadcast()
+	cond.Broadcast()
 }
 
 func (c *Conn) ackTo(nr uint16) {
@@ -331,13 +327,13 @@ func (c *Conn) deliveryProcessor() {
 					break batched
 				}
 			}
-			c.mu.Lock()
+			mu.Lock()
 			c.sendPendingState()
-			c.mu.Unlock()
+			mu.Unlock()
 		case <-time.After(packetReadTimeout):
-			c.mu.Lock()
+			mu.Lock()
 			c.destroy(errors.New("no packet read timeout"))
-			c.mu.Unlock()
+			mu.Unlock()
 		}
 	}
 }
@@ -345,16 +341,16 @@ func (c *Conn) deliveryProcessor() {
 func (c *Conn) updateStates() {
 	if c.wroteFin && len(c.unackedSends) <= 1 && c.gotFin {
 		c.closed = true
-		c.event.Broadcast()
+		cond.Broadcast()
 	}
 }
 
 func (c *Conn) processDelivery(h header, payload []byte) {
 	deliveriesProcessed.Add(1)
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	defer c.updateStates()
-	defer c.event.Broadcast()
+	defer cond.Broadcast()
 	c.assertHeader(h)
 	c.peerWndSize = h.WndSize
 	c.applyAcks(h)
@@ -460,14 +456,14 @@ func (c *Conn) waitAck(seq uint16) {
 		return
 	}
 	for !send.acked && !c.closed {
-		c.event.Wait()
+		cond.Wait()
 	}
 	return
 }
 
 func (c *Conn) connect() (err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	c.seq_nr = 1
 	c.writeSyn()
 	c.sentSyn = true
@@ -480,7 +476,7 @@ func (c *Conn) connect() (err error) {
 		err = c.err
 	}
 	c.synAcked = true
-	c.event.Broadcast()
+	cond.Broadcast()
 	return err
 }
 
@@ -490,23 +486,23 @@ func (c *Conn) writeFin() {
 	}
 	c.write(stFin, c.send_id, nil, c.seq_nr)
 	c.wroteFin = true
-	c.event.Broadcast()
+	cond.Broadcast()
 	return
 }
 
 func (c *Conn) destroy(reason error) {
 	c.closed = true
-	c.event.Broadcast()
+	cond.Broadcast()
 	if c.err == nil {
 		c.err = reason
 	}
 }
 
 func (c *Conn) Close() (err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	c.closing = true
-	c.event.Broadcast()
+	cond.Broadcast()
 	c.writeFin()
 	for {
 		if c.wroteFin && len(c.unackedSends) <= 1 {
@@ -517,7 +513,7 @@ func (c *Conn) Close() (err error) {
 			err = c.err
 			break
 		}
-		c.event.Wait()
+		cond.Wait()
 	}
 	return
 }
@@ -527,8 +523,8 @@ func (c *Conn) LocalAddr() net.Addr {
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	for {
 		if len(c.readBuf) != 0 {
 			break
@@ -548,7 +544,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			err = errTimeout
 			return
 		}
-		c.event.Wait()
+		cond.Wait()
 	}
 	n = copy(b, c.readBuf)
 	c.readBuf = c.readBuf[n:]
@@ -565,8 +561,8 @@ func (c *Conn) String() string {
 }
 
 func (c *Conn) Write(p []byte) (n int, err error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	for len(p) != 0 {
 		for {
 			if c.wroteFin || c.gotFin {
@@ -584,7 +580,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 				c.cur_window <= c.peerWndSize {
 				break
 			}
-			c.event.Wait()
+			cond.Wait()
 		}
 		var n1 int
 		n1 = c.write(stData, c.send_id, p, c.seq_nr)

@@ -27,7 +27,7 @@ func (s *send) Ack() (latency time.Duration, first bool) {
 		latency = missinggo.MonotonicSince(s.started)
 	}
 	s.acked = true
-	s.conn.event.Broadcast()
+	cond.Broadcast()
 	s.resend = nil
 	if s.resendTimer != nil {
 		s.resendTimer.Stop()
@@ -41,8 +41,8 @@ func (s *send) timedOut() {
 }
 
 func (s *send) timeoutResend() {
-	s.conn.mu.Lock()
-	defer s.conn.mu.Unlock()
+	mu.Lock()
+	defer mu.Unlock()
 	if missinggo.MonotonicSince(s.started) >= writeTimeout {
 		s.timedOut()
 		return
