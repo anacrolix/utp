@@ -15,6 +15,7 @@ import (
 
 	_ "github.com/anacrolix/envpprof"
 	"github.com/anacrolix/missinggo"
+	"github.com/anacrolix/missinggo/inproc"
 	"github.com/bradfitz/iter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -125,7 +126,7 @@ func TestUTPRawConn(t *testing.T) {
 		t.Fatalf("error dialing utp listener: %s", err)
 	}
 	defer utpPeer.Close()
-	peer, err := net.ListenPacket("udp", ":0")
+	peer, err := listenPacket("udp", ":0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +273,7 @@ func TestConnectSelf(t *testing.T) {
 	// A rough guess says that at worst, I can only have 0x10000/3 connections
 	// to the same socket, due to fragmentation in the assigned connection
 	// IDs.
-	connectSelfLots(0x1000, t)
+	connectSelfLots(0x100, t)
 }
 
 func BenchmarkConnectSelf(b *testing.B) {
@@ -485,6 +486,7 @@ func sleepWhile(l sync.Locker, cond func() bool) {
 }
 
 func TestMain(m *testing.M) {
+	listenPacket = inproc.ListenPacket
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		WriteStatus(w)
 	})

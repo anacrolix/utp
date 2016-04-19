@@ -44,10 +44,12 @@ type Socket struct {
 	ReadErr error
 }
 
+var listenPacket = net.ListenPacket
+
 // addr is used to create a listening UDP conn which becomes the underlying
 // net.PacketConn for the Socket.
 func NewSocket(network, addr string) (s *Socket, err error) {
-	pc, err := net.ListenPacket(network, addr)
+	pc, err := listenPacket(network, addr)
 	if err != nil {
 		return
 	}
