@@ -341,10 +341,10 @@ func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn
 		s.conns = make(map[connKey]*Conn)
 	}
 	key := connKey{remoteAddr, recvID}
-	c.connKey = key
 	if _, ok := s.conns[key]; ok {
 		return false
 	}
+	c.connKey = key
 	s.conns[key] = c
 	return true
 }
