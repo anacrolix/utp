@@ -20,6 +20,7 @@ type Conn struct {
 	lastTimeDiff     uint32
 	peerWndSize      uint32
 	cur_window       uint32
+	connKey          connKey
 
 	// Data waiting to be Read.
 	readBuf []byte
@@ -336,8 +337,7 @@ func (c *Conn) deliveryProcessor() {
 
 func (c *Conn) updateStates() {
 	if c.wroteFin && len(c.unackedSends) <= 1 && c.gotFin {
-		c.destroyed = true
-		cond.Broadcast()
+		c.destroy(nil)
 	}
 }
 
@@ -492,6 +492,7 @@ func (c *Conn) destroy(reason error) {
 	if c.err == nil {
 		c.err = reason
 	}
+	c.detach()
 }
 
 func (c *Conn) Close() (err error) {
@@ -585,4 +586,17 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 		p = p[n1:]
 	}
 	return
+}
+
+func (c *Conn) detach() {
+	s := c.socket
+	_, ok := s.conns[c.connKey]
+	if !ok {
+		return
+	}
+	delete(s.conns, c.connKey)
+	close(c.packetsIn)
+	if s.closed.IsSet() {
+		s.teardown()
+	}
 }

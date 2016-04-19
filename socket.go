@@ -335,33 +335,17 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 	return
 }
 
-func (s *Socket) detacher(c *Conn, key connKey) {
-	mu.Lock()
-	defer mu.Unlock()
-	for !c.destroyed {
-		cond.Wait()
-	}
-	if s.conns[key] != c {
-		panic("conn changed")
-	}
-	delete(s.conns, key)
-	close(c.packetsIn)
-	if s.closed.IsSet() {
-		s.teardown()
-	}
-}
-
 // Returns true if the connection was newly registered, false otherwise.
 func (s *Socket) registerConn(recvID uint16, remoteAddr resolvedAddrStr, c *Conn) bool {
 	if s.conns == nil {
 		s.conns = make(map[connKey]*Conn)
 	}
 	key := connKey{remoteAddr, recvID}
+	c.connKey = key
 	if _, ok := s.conns[key]; ok {
 		return false
 	}
 	s.conns[key] = c
-	go s.detacher(c, key)
 	return true
 }
 
