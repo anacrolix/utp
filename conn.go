@@ -31,14 +31,14 @@ type Conn struct {
 	// When the conn was allocated.
 	created time.Time
 
-	sentSyn  bool
-	synAcked bool
-	gotFin   bool
-	wroteFin bool
-	finAcked bool
-	err      error
-	closing  bool
-	closed   bool
+	sentSyn   bool
+	synAcked  bool
+	gotFin    bool
+	wroteFin  bool
+	finAcked  bool
+	err       error
+	closed    bool
+	destroyed bool
 
 	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
@@ -66,7 +66,7 @@ func (c *Conn) sendPendingState() {
 	if !c.pendingSendState {
 		return
 	}
-	if c.closed {
+	if c.destroyed {
 		c.sendReset()
 	} else {
 		c.sendState()
@@ -336,7 +336,7 @@ func (c *Conn) deliveryProcessor() {
 
 func (c *Conn) updateStates() {
 	if c.wroteFin && len(c.unackedSends) <= 1 && c.gotFin {
-		c.closed = true
+		c.destroyed = true
 		cond.Broadcast()
 	}
 }
@@ -451,7 +451,7 @@ func (c *Conn) waitAck(seq uint16) {
 	if send == nil {
 		return
 	}
-	for !send.acked && !c.closed {
+	for !send.acked && !c.destroyed {
 		cond.Wait()
 	}
 	return
@@ -487,7 +487,7 @@ func (c *Conn) writeFin() {
 }
 
 func (c *Conn) destroy(reason error) {
-	c.closed = true
+	c.destroyed = true
 	cond.Broadcast()
 	if c.err == nil {
 		c.err = reason
@@ -497,7 +497,7 @@ func (c *Conn) destroy(reason error) {
 func (c *Conn) Close() (err error) {
 	mu.Lock()
 	defer mu.Unlock()
-	c.closing = true
+	c.closed = true
 	cond.Broadcast()
 	c.writeFin()
 	for {
@@ -505,7 +505,7 @@ func (c *Conn) Close() (err error) {
 			// Sent FIN and it's the only thing unacked.
 			break
 		}
-		if c.closed {
+		if c.destroyed {
 			err = c.err
 			break
 		}
@@ -529,7 +529,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			err = io.EOF
 			return
 		}
-		if c.closed {
+		if c.destroyed {
 			if c.err == nil {
 				panic("closed without receiving fin, and no error")
 			}

@@ -338,7 +338,7 @@ func (me *Socket) writeTo(b []byte, addr net.Addr) (n int, err error) {
 func (s *Socket) detacher(c *Conn, key connKey) {
 	mu.Lock()
 	defer mu.Unlock()
-	for !c.closed {
+	for !c.destroyed {
 		cond.Wait()
 	}
 	if s.conns[key] != c {
