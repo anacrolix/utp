@@ -173,15 +173,11 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	send := &send{
 		payloadSize: uint32(len(payload)),
 		started:     missinggo.MonotonicNow(),
-		resend: func() {
-			mu.Lock()
-			err := c.send(_type, connID, payload, seqNr)
-			if err != nil {
-				log.Printf("error resending packet: %s", err)
-			}
-			mu.Unlock()
-		},
-		conn: c,
+		_type:       _type,
+		connID:      connID,
+		payload:     payload,
+		seqNr:       seqNr,
+		conn:        c,
 	}
 	send.resendTimer = time.AfterFunc(c.resendTimeout(), send.timeoutResend)
 	c.unackedSends = append(c.unackedSends, send)

@@ -1,6 +1,7 @@
 package utp
 
 import (
+	"log"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -10,9 +11,11 @@ type send struct {
 	acked       bool // Closed with Conn lock.
 	payloadSize uint32
 	started     missinggo.MonotonicTime
-	// This send was skipped in a selective ack.
-	resend func()
-	conn   *Conn
+	_type       st
+	connID      uint16
+	payload     []byte
+	seqNr       uint16
+	conn        *Conn
 
 	acksSkipped int
 	resendTimer *time.Timer
@@ -28,7 +31,6 @@ func (s *send) Ack() (latency time.Duration, first bool) {
 	}
 	s.acked = true
 	cond.Broadcast()
-	s.resend = nil
 	if s.resendTimer != nil {
 		s.resendTimer.Stop()
 		s.resendTimer = nil
@@ -54,4 +56,16 @@ func (s *send) timeoutResend() {
 	go s.resend()
 	s.numResends++
 	s.resendTimer.Reset(rt * time.Duration(s.numResends))
+}
+
+func (s *send) resend() {
+	mu.Lock()
+	defer mu.Unlock()
+	if s.acked {
+		return
+	}
+	err := s.conn.send(s._type, s.connID, s.payload, s.seqNr)
+	if err != nil {
+		log.Printf("error resending packet: %s", err)
+	}
 }
