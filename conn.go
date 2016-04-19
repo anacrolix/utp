@@ -336,7 +336,7 @@ func (c *Conn) deliveryProcessor() {
 }
 
 func (c *Conn) updateStates() {
-	if c.wroteFin && len(c.unackedSends) <= 1 && c.gotFin {
+	if c.wroteFin && len(c.unackedSends) <= 0 && (c.gotFin || c.closed) {
 		c.destroy(nil)
 	}
 }
