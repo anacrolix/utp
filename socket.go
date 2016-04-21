@@ -44,7 +44,13 @@ type Socket struct {
 	ReadErr error
 }
 
-var listenPacket = net.ListenPacket
+// These variables allow hooking for more reliable transports in testing.
+var (
+	listenPacket = net.ListenPacket
+	resolveAddr  = func(a, b string) (net.Addr, error) {
+		return net.ResolveUDPAddr(a, b)
+	}
+)
 
 // addr is used to create a listening UDP conn which becomes the underlying
 // net.PacketConn for the Socket.
@@ -279,7 +285,7 @@ func (s *Socket) Dial(addr string) (net.Conn, error) {
 }
 
 func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
-	netAddr, err := net.ResolveUDPAddr("udp", addr)
+	netAddr, err := resolveAddr("udp", addr)
 	if err != nil {
 		return
 	}

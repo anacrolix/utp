@@ -145,7 +145,7 @@ func packetDebugString(h *header, payload []byte) string {
 }
 
 func stringAddr(s string) net.Addr {
-	addr, err := net.ResolveUDPAddr("udp", s)
+	addr, err := resolveAddr("", s)
 	if err != nil {
 		panic(err)
 	}

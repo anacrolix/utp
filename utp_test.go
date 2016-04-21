@@ -486,10 +486,11 @@ func sleepWhile(l sync.Locker, cond func() bool) {
 }
 
 func TestMain(m *testing.M) {
-	listenPacket = inproc.ListenPacket
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		WriteStatus(w)
 	})
+	listenPacket = inproc.ListenPacket
+	resolveAddr = inproc.ResolveAddr
 	code := m.Run()
 	WriteStatus(os.Stderr)
 	mu.Lock()
