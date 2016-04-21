@@ -458,6 +458,7 @@ func TestAcceptGone(t *testing.T) {
 	require.NoError(t, err)
 	defer c.Close()
 	err = c.SetReadDeadline(time.Now().Add(time.Millisecond))
+	require.NoError(t, err)
 	_, err = c.Read(nil)
 	require.EqualError(t, err, "i/o timeout")
 }
