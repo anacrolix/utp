@@ -501,3 +501,68 @@ func TestMain(m *testing.M) {
 	}
 	os.Exit(code)
 }
+
+func TestAcceptReturnsAfterClose(t *testing.T) {
+	s, err := NewSocket("", "")
+	require.NoError(t, err)
+	go s.Close()
+	_, err = s.Accept()
+	t.Log(err)
+}
+func init() {
+	log.SetFlags(log.Flags() | log.Lshortfile)
+}
+
+func TestSaturateSocketConnIDs(t *testing.T) {
+	s, err := NewSocket("", "")
+	require.NoError(t, err)
+	defer s.Close()
+	var acceptedConns, dialedConns []net.Conn
+	for range iter.N(500) {
+		accepted := make(chan struct{})
+		go func() {
+			c, err := s.Accept()
+			if err != nil {
+				t.Log(err)
+				return
+			}
+			acceptedConns = append(acceptedConns, c)
+			close(accepted)
+		}()
+		c, err := s.Dial(s.Addr().String())
+		require.NoError(t, err)
+		dialedConns = append(dialedConns, c)
+		<-accepted
+	}
+	t.Logf("%d dialed conns, %d accepted", len(dialedConns), len(acceptedConns))
+	for i := range iter.N(len(dialedConns)) {
+		data := []byte(fmt.Sprintf("%7d", i))
+		dc := dialedConns[i]
+		n, err := dc.Write(data)
+		require.NoError(t, err)
+		require.EqualValues(t, 7, n)
+		require.NoError(t, dc.Close())
+		var b [8]byte
+		ac := acceptedConns[i]
+		n, err = ac.Read(b[:])
+		require.NoError(t, err)
+		require.EqualValues(t, 7, n)
+		require.EqualValues(t, data, b[:n])
+		n, err = ac.Read(b[:])
+		require.EqualValues(t, 0, n)
+		require.EqualValues(t, io.EOF, err)
+		ac.Close()
+	}
+}
+
+func TestWriteClose(t *testing.T) {
+	a, b := connPair()
+	defer a.Close()
+	defer b.Close()
+	a.Write([]byte("hiho"))
+	a.Close()
+	c, err := ioutil.ReadAll(b)
+	require.NoError(t, err)
+	require.EqualValues(t, "hiho", c)
+	b.Close()
+}
