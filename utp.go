@@ -57,11 +57,28 @@ var (
 	// than the latency we expect on most connections to prevent excessive
 	// resending to peers that take a long time to respond, before we've got a
 	// better idea of their actual latency.
-	initialLatency = 400 * time.Millisecond
+	initialLatency time.Duration
 	// If a write isn't acked within this period, destroy the connection.
-	writeTimeout      = 15 * time.Second
-	packetReadTimeout = 2 * time.Minute
+	writeTimeout time.Duration
+	// Assume the connection has been closed by the peer getting no packets of
+	// any kind for this time.
+	packetReadTimeout time.Duration
 )
+
+func setDefaultDurations() {
+	// An approximate upper bound for most connections across the world.
+	initialLatency = 400 * time.Millisecond
+	// Getting no reply for this period for a packet, we can probably rule out
+	// latency and client lag.
+	writeTimeout = 15 * time.Second
+	// Somewhere longer than the BitTorrent grace period (90-120s), and less
+	// than default TCP reset (4min).
+	packetReadTimeout = 2 * time.Minute
+}
+
+func init() {
+	setDefaultDurations()
+}
 
 // Strongly-type guarantee of resolved network address.
 type resolvedAddrStr string

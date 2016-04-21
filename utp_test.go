@@ -21,8 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func init() {
-	log.SetFlags(log.Flags() | log.Lshortfile)
+func setDefaultTestingDurations() {
 	writeTimeout = 1 * time.Second
 	initialLatency = 10 * time.Millisecond
 	packetReadTimeout = 2 * time.Second
@@ -491,6 +490,7 @@ func TestMain(m *testing.M) {
 	})
 	listenPacket = inproc.ListenPacket
 	resolveAddr = inproc.ResolveAddr
+	setDefaultTestingDurations()
 	code := m.Run()
 	WriteStatus(os.Stderr)
 	mu.Lock()
