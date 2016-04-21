@@ -446,7 +446,6 @@ func TestConnCloseUnclosedSocket(t *testing.T) {
 }
 
 func TestAcceptGone(t *testing.T) {
-	defer sleepWhile(&mu, func() bool { return len(sockets) != 0 })
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	defer s.Close()

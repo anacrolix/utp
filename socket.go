@@ -324,7 +324,9 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 		err = errTimeout
 	}
 	if err != nil {
-		c.Close()
+		mu.Lock()
+		c.destroy(errors.New("dial timeout"))
+		mu.Unlock()
 		return
 	}
 	nc = pproffd.WrapNetConn(c)
