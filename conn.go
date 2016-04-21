@@ -335,8 +335,8 @@ func (c *Conn) deliveryProcessor() {
 	}
 }
 
-func (c *Conn) updateStates() {
-	if c.wroteFin && len(c.unackedSends) <= 0 && (c.gotFin || c.closed) {
+func (c *Conn) lazyDestroy() {
+	if c.wroteFin && len(c.unackedSends) <= 1 && (c.gotFin || c.closed) {
 		c.destroy(nil)
 	}
 }
@@ -345,7 +345,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	deliveriesProcessed.Add(1)
 	mu.Lock()
 	defer mu.Unlock()
-	defer c.updateStates()
+	defer c.lazyDestroy()
 	defer cond.Broadcast()
 	c.assertHeader(h)
 	c.peerWndSize = h.WndSize
@@ -501,17 +501,7 @@ func (c *Conn) Close() (err error) {
 	c.closed = true
 	cond.Broadcast()
 	c.writeFin()
-	for {
-		if c.wroteFin && len(c.unackedSends) <= 1 {
-			// Sent FIN and it's the only thing unacked.
-			break
-		}
-		if c.destroyed {
-			err = c.err
-			break
-		}
-		cond.Wait()
-	}
+	c.lazyDestroy()
 	return
 }
 
