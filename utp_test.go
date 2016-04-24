@@ -572,14 +572,15 @@ func TestWriteClose(t *testing.T) {
 	b.Close()
 }
 
+// Check that Conn.Write fails when the PacketConn that Socket wraps is
+// closed.
 func TestWriteUnderlyingPacketConnClosed(t *testing.T) {
-	// writeTimeout = time.Hour
-	// packetReadTimeout = time.Hour
 	pc, err := listenPacket("udp", "localhost:0")
 	require.NoError(t, err)
+	defer pc.Close()
 	s, err := NewSocketFromPacketConn(pc)
 	require.NoError(t, err)
-	log.Println("pc closed")
+	defer s.Close()
 	dc, ac := connPairSocket(s)
 	defer dc.Close()
 	defer ac.Close()
