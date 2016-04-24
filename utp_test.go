@@ -341,28 +341,32 @@ func TestResetAfterFuncTimer(t *testing.T) {
 	<-fired
 }
 
+func connPairSocket(s *Socket) (initer, accepted net.Conn) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var err error
+		initer, err = s.Dial(s.Addr().String())
+		if err != nil {
+			panic(err)
+		}
+	}()
+	accepted, err := s.Accept()
+	if err != nil {
+		panic(err)
+	}
+	wg.Wait()
+	return
+}
+
 func connPair() (initer, accepted net.Conn) {
 	s, err := NewSocket("udp", "localhost:0")
 	if err != nil {
 		panic(err)
 	}
 	defer s.Close()
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		var err error
-		initer, err = Dial(s.Addr().String())
-		if err != nil {
-			panic(err)
-		}
-	}()
-	accepted, err = s.Accept()
-	if err != nil {
-		panic(err)
-	}
-	wg.Wait()
-	return
+	return connPairSocket(s)
 }
 
 // Check that peer sending FIN doesn't cause unread data to be dropped in a
@@ -509,6 +513,7 @@ func TestAcceptReturnsAfterClose(t *testing.T) {
 	_, err = s.Accept()
 	t.Log(err)
 }
+
 func init() {
 	log.SetFlags(log.Flags() | log.Lshortfile)
 }
