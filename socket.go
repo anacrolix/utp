@@ -33,7 +33,6 @@ type Socket struct {
 	backlogNotEmpty missinggo.Event
 	backlog         map[syn]struct{}
 
-	reads  chan read
 	closed missinggo.Event
 
 	unusedReads chan read
@@ -68,7 +67,6 @@ func NewSocket(network, addr string) (s *Socket, err error) {
 func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	s = &Socket{
 		backlog: make(map[syn]struct{}, backlog),
-		reads:   make(chan read, 100),
 		pc:      pc,
 
 		unusedReads: make(chan read, 100),
@@ -77,7 +75,6 @@ func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	sockets[s] = struct{}{}
 	mu.Unlock()
 	go s.reader()
-	go s.dispatcher()
 	return
 }
 
@@ -107,45 +104,33 @@ func (s *Socket) pushBacklog(syn syn) {
 	s.backlogChanged()
 }
 
-func (s *Socket) dispatcher() {
-	for {
-		select {
-		case read, ok := <-s.reads:
-			if !ok {
-				return
-			}
-			if len(read.data) < 20 {
-				s.unusedRead(read)
-				continue
-			}
-			s.dispatch(read)
-		}
-	}
-}
 func (s *Socket) reader() {
-	defer close(s.reads)
+	mu.Lock()
+	defer mu.Unlock()
+	defer s.destroy()
 	var b [maxRecvSize]byte
 	for {
-		if s.pc == nil {
-			break
-		}
+		mu.Unlock()
 		n, addr, err := s.pc.ReadFrom(b[:])
+		mu.Lock()
 		if err != nil {
-			mu.Lock()
-			if !s.closed.IsSet() {
-				s.ReadErr = err
-			}
-			mu.Unlock()
+			s.ReadErr = err
 			return
 		}
-		var nilB []byte
-		s.reads <- read{append(nilB, b[:n:n]...), addr}
+		s.dispatch(read{
+			append([]byte(nil), b[:n]...),
+			addr,
+		})
 	}
 }
 
 func (s *Socket) dispatch(read read) {
 	b := read.data
 	addr := read.from
+	if len(b) < 20 {
+		s.unusedRead(read)
+		return
+	}
 	var h header
 	hEnd, err := h.Unmarshal(b)
 	if logLevel >= 1 {
@@ -155,8 +140,6 @@ func (s *Socket) dispatch(read read) {
 		s.unusedRead(read)
 		return
 	}
-	mu.Lock()
-	defer mu.Unlock()
 	c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
 		recvID = h.ConnID
 		// If a SYN is resent, its connection ID field will be one lower
@@ -434,15 +417,26 @@ func (s *Socket) Close() error {
 	mu.Lock()
 	defer mu.Unlock()
 	s.closed.Set()
-	return s.teardown()
+	s.lazyDestroy()
+	return nil
 }
 
-func (s *Socket) teardown() error {
-	if len(s.conns) == 0 {
-		delete(sockets, s)
-		return s.pc.Close()
+func (s *Socket) lazyDestroy() {
+	if len(s.conns) != 0 {
+		return
 	}
-	return nil
+	if !s.closed.IsSet() {
+		return
+	}
+	s.destroy()
+}
+
+func (s *Socket) destroy() {
+	delete(sockets, s)
+	s.pc.Close()
+	for _, c := range s.conns {
+		c.destroy(errors.New("Socket destroyed"))
+	}
 }
 
 func (s *Socket) LocalAddr() net.Addr {

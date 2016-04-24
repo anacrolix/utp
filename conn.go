@@ -451,7 +451,7 @@ func (c *Conn) waitAck(seq uint16) {
 	if send == nil {
 		return
 	}
-	for !send.acked && !c.destroyed {
+	for !(send.acked || c.destroyed) {
 		cond.Wait()
 	}
 	return
@@ -584,7 +584,5 @@ func (c *Conn) detach() {
 	}
 	delete(s.conns, c.connKey)
 	close(c.packetsIn)
-	if s.closed.IsSet() {
-		s.teardown()
-	}
+	s.lazyDestroy()
 }
