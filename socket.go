@@ -84,6 +84,7 @@ func (s *Socket) unusedRead(read read) {
 	case s.unusedReads <- read:
 	default:
 		// Drop the packet.
+		unusedReadsDropped.Add(1)
 	}
 }
 

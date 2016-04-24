@@ -50,6 +50,7 @@ var (
 	deliveriesProcessed = expvar.NewInt("utpDeliveriesProcessed")
 	sentStatePackets    = expvar.NewInt("utpSentStatePackets")
 	unusedReads         = expvar.NewInt("utpUnusedReads")
+	unusedReadsDropped  = expvar.NewInt("utpUnusedReadsDropped")
 	sendBufferPool      = sync.Pool{
 		New: func() interface{} { return make([]byte, minMTU) },
 	}
