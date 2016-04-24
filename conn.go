@@ -337,7 +337,7 @@ func (c *Conn) deliveryProcessor() {
 
 func (c *Conn) lazyDestroy() {
 	if c.wroteFin && len(c.unackedSends) <= 1 && (c.gotFin || c.closed) {
-		c.destroy(nil)
+		c.destroy(errors.New("lazily destroyed"))
 	}
 }
 
@@ -550,8 +550,12 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	defer mu.Unlock()
 	for len(p) != 0 {
 		for {
-			if c.wroteFin || c.gotFin {
-				err = io.ErrClosedPipe
+			if c.wroteFin || c.closed {
+				err = errClosed
+				return
+			}
+			if c.destroyed {
+				err = c.err
 				return
 			}
 			if c.connDeadlines.write.deadlineExceeded() {

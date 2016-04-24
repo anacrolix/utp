@@ -571,3 +571,22 @@ func TestWriteClose(t *testing.T) {
 	require.EqualValues(t, "hiho", c)
 	b.Close()
 }
+
+func TestWriteUnderlyingPacketConnClosed(t *testing.T) {
+	// writeTimeout = time.Hour
+	// packetReadTimeout = time.Hour
+	pc, err := listenPacket("udp", "localhost:0")
+	require.NoError(t, err)
+	s, err := NewSocketFromPacketConn(pc)
+	require.NoError(t, err)
+	log.Println("pc closed")
+	dc, ac := connPairSocket(s)
+	defer dc.Close()
+	defer ac.Close()
+	pc.Close()
+	n, err := ac.Write([]byte("hello"))
+	require.Equal(t, 0, n)
+	require.EqualError(t, err, "error sending packet: closed")
+	_, err = dc.Read(nil)
+	require.EqualError(t, err, "Socket destroyed")
+}
