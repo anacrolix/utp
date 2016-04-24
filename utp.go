@@ -175,7 +175,9 @@ func Dial(addr string) (net.Conn, error) {
 	return DialTimeout(addr, 0)
 }
 
-// Same as Dial with a timeout parameter.
+// Same as Dial with a timeout parameter. Creates a Socket just for the
+// connection, which will be closed with the Conn is. To reuse another Socket,
+// see Socket.Dial.
 func DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
 	s, err := NewSocket("udp", ":0")
 	if err != nil {
@@ -183,7 +185,6 @@ func DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
 	}
 	defer s.Close()
 	return s.DialTimeout(addr, timeout)
-
 }
 
 func nowTimestamp() uint32 {

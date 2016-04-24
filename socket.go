@@ -267,6 +267,8 @@ func (s *Socket) Dial(addr string) (net.Conn, error) {
 	return s.DialTimeout(addr, 0)
 }
 
+// A zero timeout is no timeout. This will fallback onto the write ack
+// timeout.
 func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
 	netAddr, err := resolveAddr("udp", addr)
 	if err != nil {
