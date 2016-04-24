@@ -250,16 +250,6 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		created:    time.Now(),
 		packetsIn:  make(chan packet, 100),
 	}
-	c.connDeadlines.read.setCallback(func() {
-		mu.Lock()
-		cond.Broadcast()
-		mu.Unlock()
-	})
-	c.connDeadlines.write.setCallback(func() {
-		mu.Lock()
-		cond.Broadcast()
-		mu.Unlock()
-	})
 	go c.deliveryProcessor()
 	return
 }

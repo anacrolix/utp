@@ -2,56 +2,56 @@ package utp
 
 import "time"
 
-type deadlineCallback struct {
-	deadline time.Time
-	timer    *time.Timer
-	callback func()
+type deadline struct {
+	t      time.Time
+	passed bool
+	timer  *time.Timer
 }
 
-func (me *deadlineCallback) deadlineExceeded() bool {
-	return !me.deadline.IsZero() && !time.Now().Before(me.deadline)
+func (me *deadline) set(t time.Time) {
+	me.passed = false
+	me.t = t
+	me.timer = time.AfterFunc(0, me.callback)
 }
 
-func (me *deadlineCallback) updateTimer() {
-	if me.timer != nil {
-		me.timer.Stop()
-	}
-	if me.deadline.IsZero() {
+func (me *deadline) callback() {
+	mu.Lock()
+	defer mu.Unlock()
+	if me.t.IsZero() {
 		return
 	}
-	if me.callback == nil {
-		panic("deadline callback is nil")
+	if time.Now().Before(me.t) {
+		me.timer.Reset(me.t.Sub(time.Now()))
+		return
 	}
-	me.timer = time.AfterFunc(me.deadline.Sub(time.Now()), me.callback)
+	me.passed = true
+	cond.Broadcast()
 }
 
-func (me *deadlineCallback) setDeadline(t time.Time) {
-	me.deadline = t
-	me.updateTimer()
-}
-
-func (me *deadlineCallback) setCallback(f func()) {
-	me.callback = f
-	me.updateTimer()
-}
-
+// This is embedded in Conn to provide deadline methods for net.Conn. It
+// tickles global mu and cond as required.
 type connDeadlines struct {
-	// mu          sync.Mutex
-	read, write deadlineCallback
+	read, write deadline
 }
 
 func (c *connDeadlines) SetDeadline(t time.Time) error {
-	c.read.setDeadline(t)
-	c.write.setDeadline(t)
+	mu.Lock()
+	defer mu.Unlock()
+	c.read.set(t)
+	c.write.set(t)
 	return nil
 }
 
 func (c *connDeadlines) SetReadDeadline(t time.Time) error {
-	c.read.setDeadline(t)
+	mu.Lock()
+	defer mu.Unlock()
+	c.read.set(t)
 	return nil
 }
 
 func (c *connDeadlines) SetWriteDeadline(t time.Time) error {
-	c.write.setDeadline(t)
+	mu.Lock()
+	defer mu.Unlock()
+	c.write.set(t)
 	return nil
 }

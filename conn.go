@@ -529,7 +529,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 			err = c.err
 			return
 		}
-		if c.connDeadlines.read.deadlineExceeded() {
+		if c.connDeadlines.read.passed {
 			err = errTimeout
 			return
 		}
@@ -558,7 +558,7 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 				err = c.err
 				return
 			}
-			if c.connDeadlines.write.deadlineExceeded() {
+			if c.connDeadlines.write.passed {
 				err = errTimeout
 				return
 			}

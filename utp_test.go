@@ -590,3 +590,12 @@ func TestWriteUnderlyingPacketConnClosed(t *testing.T) {
 	_, err = dc.Read(nil)
 	require.EqualError(t, err, "Socket destroyed")
 }
+
+func TestSetSocketDeadlines(t *testing.T) {
+	s, err := NewSocket("udp", "localhost:0")
+	require.NoError(t, err)
+	assert.NoError(t, s.SetReadDeadline(time.Now().Add(time.Second)))
+	assert.NoError(t, s.SetWriteDeadline(time.Now().Add(time.Second)))
+	assert.NoError(t, s.SetDeadline(time.Time{}))
+	assert.NoError(t, s.Close())
+}
