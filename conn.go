@@ -45,10 +45,18 @@ type Conn struct {
 	// Inbound payloads, the first is ack_nr+1.
 	inbound    []recv
 	inboundWnd uint32
-	packetsIn  chan packet
 	connDeadlines
-	latencies        []time.Duration
+	latencies []time.Duration
+
+	// We need to send state packet.
 	pendingSendState bool
+	sendStateTimer   *time.Timer
+	// Send state is being delayed until sendStateTimer fires, which may have
+	// been set at the beginning of a batch of received packets.
+	batchingSendState bool
+
+	// This timer fires when no packet has been received for a period.
+	packetReadTimeoutTimer *time.Timer
 }
 
 var (
@@ -63,7 +71,14 @@ func (c *Conn) timestamp() uint32 {
 	return nowTimestamp() - c.startTimestamp
 }
 
+func (c *Conn) sendPendingStateUnlocked() {
+	mu.Lock()
+	defer mu.Unlock()
+	c.sendPendingState()
+}
+
 func (c *Conn) sendPendingState() {
+	c.batchingSendState = false
 	if !c.pendingSendState {
 		return
 	}
@@ -187,6 +202,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	return
 }
 
+// TODO: Introduce a minimum latency.
 func (c *Conn) latency() (ret time.Duration) {
 	if len(c.latencies) == 0 {
 		return initialLatency
@@ -297,42 +313,22 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	}
 }
 
-func (c *Conn) deliver(h header, payload []byte) {
-	c.packetsIn <- packet{h, payload}
+// Handle a packet destined for this connection.
+func (c *Conn) receivePacket(h header, payload []byte) {
+	c.packetReadTimeoutTimer.Reset(packetReadTimeout)
+	c.processDelivery(h, payload)
+	if !c.batchingSendState {
+		// Set timer to send state ack for a series of packets received in
+		// quick succession.
+		c.batchingSendState = true
+		c.sendStateTimer.Reset(500 * time.Microsecond)
+	}
 }
 
-func (c *Conn) deliveryProcessor() {
-	for {
-		select {
-		case p, ok := <-c.packetsIn:
-			if !ok {
-				return
-			}
-			c.processDelivery(p.h, p.payload)
-			// Process a batch if they arrive in quick succession without
-			// acking them until there's a pause.
-			timeout := time.After(500 * time.Microsecond)
-		batched:
-			for {
-				select {
-				case p, ok := <-c.packetsIn:
-					if !ok {
-						break batched
-					}
-					c.processDelivery(p.h, p.payload)
-				case <-timeout:
-					break batched
-				}
-			}
-			mu.Lock()
-			c.sendPendingState()
-			mu.Unlock()
-		case <-time.After(packetReadTimeout):
-			mu.Lock()
-			c.destroy(errors.New("no packet read timeout"))
-			mu.Unlock()
-		}
-	}
+func (c *Conn) receivePacketTimeoutCallback() {
+	mu.Lock()
+	c.destroy(errors.New("no packet read timeout"))
+	mu.Unlock()
 }
 
 func (c *Conn) lazyDestroy() {
@@ -343,8 +339,6 @@ func (c *Conn) lazyDestroy() {
 
 func (c *Conn) processDelivery(h header, payload []byte) {
 	deliveriesProcessed.Add(1)
-	mu.Lock()
-	defer mu.Unlock()
 	defer c.lazyDestroy()
 	defer cond.Broadcast()
 	c.assertHeader(h)
@@ -587,6 +581,5 @@ func (c *Conn) detach() {
 		return
 	}
 	delete(s.conns, c.connKey)
-	close(c.packetsIn)
 	s.lazyDestroy()
 }

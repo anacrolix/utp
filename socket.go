@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"math"
 	"math/rand"
 	"net"
 	"time"
@@ -165,7 +166,7 @@ func (s *Socket) dispatch(read read) {
 				panic("bad assumption")
 			}
 		}
-		c.deliver(h, b[hEnd:])
+		c.receivePacket(h, b[hEnd:])
 		return
 	}
 	if h.Type == stSyn {
@@ -248,9 +249,10 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		socket:     s,
 		remoteAddr: addr,
 		created:    time.Now(),
-		packetsIn:  make(chan packet, 100),
 	}
-	go c.deliveryProcessor()
+	c.sendStateTimer = time.AfterFunc(math.MaxInt64, c.sendPendingStateUnlocked)
+	c.sendStateTimer.Stop()
+	c.packetReadTimeoutTimer = time.AfterFunc(packetReadTimeout, c.receivePacketTimeoutCallback)
 	return
 }
 
