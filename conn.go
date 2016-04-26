@@ -367,6 +367,8 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	if h.Type == stState {
 		return
 	}
+	// Even if we didn't need or want this packet, we need to inform the peer
+	// what our state is, in case they missed something.
 	c.pendSendState()
 	if !seqLess(c.ack_nr, h.SeqNr) {
 		// Already received this packet.
@@ -430,7 +432,7 @@ func (c *Conn) assertHeader(h header) {
 
 func (c *Conn) processInbound() {
 	// Consume consecutive next packets.
-	for !c.gotFin.Get() && len(c.inbound) > 0 && c.inbound[0].seen {
+	for !c.gotFin.Get() && len(c.inbound) > 0 && c.inbound[0].seen && len(c.readBuf) < readBufferLen {
 		c.ack_nr++
 		p := c.inbound[0]
 		c.inbound = c.inbound[1:]
@@ -513,6 +515,8 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 		n = copy(b, c.readBuf)
 		c.readBuf = c.readBuf[n:]
 		if n != 0 {
+			// Inbound packets are backed up when the read buffer is too big.
+			c.processInbound()
 			return
 		}
 		if c.gotFin.Get() || c.closed.Get() {

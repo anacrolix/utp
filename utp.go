@@ -42,6 +42,8 @@ const (
 	// Maximum out-of-order packets to buffer.
 	maxUnackedInbound = 256
 	maxUnackedSends   = 256
+
+	readBufferLen = 1 << 20 // ~1MiB
 )
 
 var (

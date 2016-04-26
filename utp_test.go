@@ -1,6 +1,7 @@
 package utp
 
 import (
+	"crypto/rand"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -599,4 +600,30 @@ func TestSetSocketDeadlines(t *testing.T) {
 	assert.NoError(t, s.SetWriteDeadline(time.Now().Add(time.Second)))
 	assert.NoError(t, s.SetDeadline(time.Time{}))
 	assert.NoError(t, s.Close())
+}
+
+func TestFillBuffers(t *testing.T) {
+	a, b := connPair()
+	defer b.Close()
+	var sent []byte
+	for {
+		buf := make([]byte, 100000)
+		io.ReadFull(rand.Reader, buf)
+		a.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		n, err := a.Write(buf)
+		sent = append(sent, buf[:n]...)
+		if err != nil {
+			// Receiver will stop processing packets, packets will be dropped,
+			// and thus not acked.
+			assert.Equal(t, errAckTimeout, err)
+			break
+		}
+		require.NotEqual(t, 0, n)
+	}
+	t.Logf("buffered %d bytes", len(sent))
+	a.Close()
+	all, err := ioutil.ReadAll(b)
+	assert.NoError(t, err)
+	assert.EqualValues(t, len(sent), len(all))
+	assert.EqualValues(t, sent, all)
 }
