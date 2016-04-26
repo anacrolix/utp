@@ -166,7 +166,7 @@ func (me *Conn) writeSyn() {
 	return
 }
 
-func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n int) {
+func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n int, err error) {
 	switch _type {
 	case stSyn, stFin, stData:
 	default:
@@ -178,7 +178,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	if len(payload) > maxPayloadSize {
 		payload = payload[:maxPayloadSize]
 	}
-	err := c.send(_type, connID, payload, seqNr)
+	err = c.send(_type, connID, payload, seqNr)
 	if err != nil {
 		c.destroy(fmt.Errorf("error sending packet: %s", err))
 		return
@@ -319,7 +319,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 func (c *Conn) receivePacket(h header, payload []byte) {
 	c.packetReadTimeoutTimer.Reset(packetReadTimeout)
 	c.processDelivery(h, payload)
-	if !c.batchingSendState {
+	if !c.batchingSendState && c.pendingSendState {
 		// Set timer to send state ack for a series of packets received in
 		// quick succession.
 		c.batchingSendState = true
@@ -546,33 +546,36 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	mu.Lock()
 	defer mu.Unlock()
 	for len(p) != 0 {
-		for {
-			if c.wroteFin || c.closed.Get() {
-				err = errClosed
-				return
-			}
-			if c.destroyed.Get() {
-				err = c.err
-				return
-			}
-			if c.connDeadlines.write.passed.Get() {
-				err = errTimeout
-				return
-			}
-			// If peerWndSize is 0, we still want to send something, so don't
-			// block until we exceed it.
-			if c.synAcked &&
-				len(c.unackedSends) < maxUnackedSends &&
-				c.cur_window <= c.peerWndSize {
+		if c.wroteFin || c.closed.Get() {
+			err = errClosed
+			return
+		}
+		if c.destroyed.Get() {
+			err = c.err
+			return
+		}
+		if c.connDeadlines.write.passed.Get() {
+			err = errTimeout
+			return
+		}
+		// If peerWndSize is 0, we still want to send something, so don't
+		// block until we exceed it.
+		if c.synAcked &&
+			len(c.unackedSends) < maxUnackedSends &&
+			c.cur_window <= c.peerWndSize {
+			var n1 int
+			n1, err = c.write(stData, c.send_id, p, c.seq_nr)
+			n += n1
+			if err != nil {
 				break
 			}
-			cond.Wait()
+			if n1 == 0 {
+				panic(len(p))
+			}
+			p = p[n1:]
+			continue
 		}
-		var n1 int
-		n1 = c.write(stData, c.send_id, p, c.seq_nr)
-		// c.seq_nr++
-		n += n1
-		p = p[n1:]
+		cond.Wait()
 	}
 	return
 }

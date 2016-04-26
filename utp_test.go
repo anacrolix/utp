@@ -587,7 +587,7 @@ func TestWriteUnderlyingPacketConnClosed(t *testing.T) {
 	pc.Close()
 	n, err := ac.Write([]byte("hello"))
 	require.Equal(t, 0, n)
-	require.EqualError(t, err, "error sending packet: closed")
+	require.EqualError(t, err, "closed")
 	_, err = dc.Read(nil)
 	require.EqualError(t, err, "Socket destroyed")
 }
