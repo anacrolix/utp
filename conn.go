@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -23,7 +24,8 @@ type Conn struct {
 	connKey          connKey
 
 	// Data waiting to be Read.
-	readBuf []byte
+	readBuf  []byte
+	readCond sync.Cond
 
 	socket     *Socket
 	remoteAddr net.Addr
@@ -34,12 +36,12 @@ type Conn struct {
 
 	sentSyn   bool
 	synAcked  bool
-	gotFin    bool
+	gotFin    missinggo.Flag
 	wroteFin  bool
 	finAcked  bool
 	err       error
-	closed    bool
-	destroyed bool
+	closed    missinggo.Flag
+	destroyed missinggo.Flag
 
 	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
@@ -82,7 +84,7 @@ func (c *Conn) sendPendingState() {
 	if !c.pendingSendState {
 		return
 	}
-	if c.destroyed {
+	if c.destroyed.Get() {
 		c.sendReset()
 	} else {
 		c.sendState()
@@ -332,7 +334,7 @@ func (c *Conn) receivePacketTimeoutCallback() {
 }
 
 func (c *Conn) lazyDestroy() {
-	if c.wroteFin && len(c.unackedSends) <= 1 && (c.gotFin || c.closed) {
+	if c.wroteFin && len(c.unackedSends) <= 1 && (c.gotFin.Get() || c.closed.Get()) {
 		c.destroy(errors.New("lazily destroyed"))
 	}
 }
@@ -428,14 +430,15 @@ func (c *Conn) assertHeader(h header) {
 
 func (c *Conn) processInbound() {
 	// Consume consecutive next packets.
-	for !c.gotFin && len(c.inbound) > 0 && c.inbound[0].seen {
+	for !c.gotFin.Get() && len(c.inbound) > 0 && c.inbound[0].seen {
 		c.ack_nr++
 		p := c.inbound[0]
 		c.inbound = c.inbound[1:]
 		c.inboundWnd -= uint32(len(p.data))
 		c.readBuf = append(c.readBuf, p.data...)
+		c.readCond.Broadcast()
 		if p.Type == stFin {
-			c.gotFin = true
+			c.gotFin.Set(true)
 		}
 	}
 }
@@ -445,7 +448,7 @@ func (c *Conn) waitAck(seq uint16) {
 	if send == nil {
 		return
 	}
-	for !(send.acked || c.destroyed) {
+	for !(send.acked || c.destroyed.Get()) {
 		cond.Wait()
 	}
 	return
@@ -481,7 +484,7 @@ func (c *Conn) writeFin() {
 }
 
 func (c *Conn) destroy(reason error) {
-	c.destroyed = true
+	c.destroyed.Set(true)
 	cond.Broadcast()
 	if c.err == nil {
 		c.err = reason
@@ -492,7 +495,7 @@ func (c *Conn) destroy(reason error) {
 func (c *Conn) Close() (err error) {
 	mu.Lock()
 	defer mu.Unlock()
-	c.closed = true
+	c.closed.Set(true)
 	cond.Broadcast()
 	c.writeFin()
 	c.lazyDestroy()
@@ -507,27 +510,27 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 	mu.Lock()
 	defer mu.Unlock()
 	for {
-		if len(c.readBuf) != 0 {
-			n = copy(b, c.readBuf)
-			c.readBuf = c.readBuf[n:]
+		n = copy(b, c.readBuf)
+		c.readBuf = c.readBuf[n:]
+		if n != 0 {
 			return
 		}
-		if c.gotFin || c.closed {
+		if c.gotFin.Get() || c.closed.Get() {
 			err = io.EOF
 			return
 		}
-		if c.destroyed {
+		if c.destroyed.Get() {
 			if c.err == nil {
 				panic("closed without receiving fin, and no error")
 			}
 			err = c.err
 			return
 		}
-		if c.connDeadlines.read.passed {
+		if c.connDeadlines.read.passed.Get() {
 			err = errTimeout
 			return
 		}
-		cond.Wait()
+		c.readCond.Wait()
 	}
 }
 
@@ -544,15 +547,15 @@ func (c *Conn) Write(p []byte) (n int, err error) {
 	defer mu.Unlock()
 	for len(p) != 0 {
 		for {
-			if c.wroteFin || c.closed {
+			if c.wroteFin || c.closed.Get() {
 				err = errClosed
 				return
 			}
-			if c.destroyed {
+			if c.destroyed.Get() {
 				err = c.err
 				return
 			}
-			if c.connDeadlines.write.passed {
+			if c.connDeadlines.write.passed.Get() {
 				err = errTimeout
 				return
 			}

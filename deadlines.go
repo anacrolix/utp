@@ -1,15 +1,19 @@
 package utp
 
-import "time"
+import (
+	"time"
+
+	"github.com/anacrolix/missinggo"
+)
 
 type deadline struct {
 	t      time.Time
-	passed bool
+	passed missinggo.Flag
 	timer  *time.Timer
 }
 
 func (me *deadline) set(t time.Time) {
-	me.passed = false
+	me.passed.Set(false)
 	me.t = t
 	me.timer = time.AfterFunc(0, me.callback)
 }
@@ -24,7 +28,7 @@ func (me *deadline) callback() {
 		me.timer.Reset(me.t.Sub(time.Now()))
 		return
 	}
-	me.passed = true
+	me.passed.Set(true)
 	cond.Broadcast()
 }
 

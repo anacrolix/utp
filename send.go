@@ -49,7 +49,7 @@ func (s *send) timeoutResend() {
 		s.timedOut()
 		return
 	}
-	if s.acked || s.conn.destroyed {
+	if s.acked || s.conn.destroyed.Get() {
 		return
 	}
 	rt := s.conn.resendTimeout()

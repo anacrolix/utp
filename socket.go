@@ -4,7 +4,6 @@ import (
 	"errors"
 	"io"
 	"log"
-	"math"
 	"math/rand"
 	"net"
 	"time"
@@ -250,9 +249,15 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		remoteAddr: addr,
 		created:    time.Now(),
 	}
-	c.sendStateTimer = time.AfterFunc(math.MaxInt64, c.sendPendingStateUnlocked)
-	c.sendStateTimer.Stop()
+	c.readCond.L = &mu
+	c.sendStateTimer = missinggo.StoppedFuncTimer(c.sendPendingStateUnlocked)
 	c.packetReadTimeoutTimer = time.AfterFunc(packetReadTimeout, c.receivePacketTimeoutCallback)
+	missinggo.AddCondToFlags(
+		&c.readCond,
+		&c.destroyed,
+		&c.gotFin,
+		&c.closed,
+		&c.connDeadlines.read.passed)
 	return
 }
 
