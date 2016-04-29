@@ -93,7 +93,8 @@ type read struct {
 
 type syn struct {
 	seq_nr, conn_id uint16
-	addr            string
+	// net.Addr.String() of a Socket's real net.PacketConn.
+	addr string
 }
 
 var (
@@ -162,14 +163,6 @@ type recv struct {
 
 func packetDebugString(h *header, payload []byte) string {
 	return fmt.Sprintf("%s->%d: %q", h.Type, h.ConnID, payload)
-}
-
-func stringAddr(s string) net.Addr {
-	addr, err := resolveAddr("", s)
-	if err != nil {
-		panic(err)
-	}
-	return addr
 }
 
 // Attempt to connect to a remote uTP listener, creating a Socket just for

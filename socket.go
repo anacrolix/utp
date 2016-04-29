@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/anacrolix/missinggo"
+	"github.com/anacrolix/missinggo/inproc"
 	"github.com/anacrolix/missinggo/pproffd"
 )
 
@@ -43,17 +44,19 @@ type Socket struct {
 	ReadErr error
 }
 
-// These variables allow hooking for more reliable transports in testing.
-var (
-	listenPacket = net.ListenPacket
-	resolveAddr  = func(a, b string) (net.Addr, error) {
-		return net.ResolveUDPAddr(a, b)
+func listenPacket(network, addr string) (pc net.PacketConn, err error) {
+	if network == "inproc" {
+		return inproc.ListenPacket(network, addr)
 	}
-)
+	return net.ListenPacket(network, addr)
+}
 
 // addr is used to create a listening UDP conn which becomes the underlying
 // net.PacketConn for the Socket.
 func NewSocket(network, addr string) (s *Socket, err error) {
+	if network == "" {
+		network = "udp"
+	}
 	pc, err := listenPacket(network, addr)
 	if err != nil {
 		return
@@ -88,6 +91,22 @@ func (s *Socket) unusedRead(read read) {
 	}
 }
 
+func (s *Socket) strNetAddr(str string) (a net.Addr) {
+	var err error
+	switch n := s.network(); n {
+	case "udp":
+		a, err = net.ResolveUDPAddr(n, str)
+	case "inproc":
+		a, err = inproc.ResolveAddr(n, str)
+	default:
+		panic(n)
+	}
+	if err != nil {
+		panic(err)
+	}
+	return
+}
+
 func (s *Socket) pushBacklog(syn syn) {
 	if _, ok := s.backlog[syn]; ok {
 		return
@@ -99,7 +118,7 @@ func (s *Socket) pushBacklog(syn syn) {
 		delete(s.backlog, k)
 		// A syn is sent on the remote's recv_id, so this is where we can send
 		// the reset.
-		s.reset(stringAddr(k.addr), k.seq_nr, k.conn_id)
+		s.reset(s.strNetAddr(k.addr), k.seq_nr, k.conn_id)
 	}
 	s.backlog[syn] = struct{}{}
 	s.backlogChanged()
@@ -265,10 +284,22 @@ func (s *Socket) Dial(addr string) (net.Conn, error) {
 	return s.DialTimeout(addr, 0)
 }
 
+func (s *Socket) resolveAddr(addr string) (net.Addr, error) {
+	n := s.network()
+	if n == "inproc" {
+		return inproc.ResolveAddr(n, addr)
+	}
+	return net.ResolveUDPAddr(n, addr)
+}
+
+func (s *Socket) network() string {
+	return s.pc.LocalAddr().Network()
+}
+
 // A zero timeout is no timeout. This will fallback onto the write ack
 // timeout.
 func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
-	netAddr, err := resolveAddr("udp", addr)
+	netAddr, err := s.resolveAddr(addr)
 	if err != nil {
 		return
 	}
@@ -381,7 +412,7 @@ func (s *Socket) Accept() (c net.Conn, err error) {
 			return
 		}
 		mu.Lock()
-		_c := s.newConn(stringAddr(syn.addr))
+		_c := s.newConn(s.strNetAddr(syn.addr))
 		_c.send_id = syn.conn_id
 		_c.recv_id = _c.send_id + 1
 		_c.seq_nr = uint16(rand.Int())

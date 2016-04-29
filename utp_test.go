@@ -101,7 +101,7 @@ func TestMinMaxHeaderType(t *testing.T) {
 }
 
 func TestUTPRawConn(t *testing.T) {
-	l, err := NewSocket("udp", "")
+	l, err := NewSocket("inproc", "")
 	require.NoError(t, err)
 	defer l.Close()
 	go func() {
@@ -115,7 +115,7 @@ func TestUTPRawConn(t *testing.T) {
 	// Connect a UTP peer to see if the RawConn will still work.
 	log.Print("dialing")
 	utpPeer := func() net.Conn {
-		s, _ := NewSocket("udp", "")
+		s, _ := NewSocket("inproc", "")
 		defer s.Close()
 		ret, err := s.Dial(fmt.Sprintf("localhost:%d", missinggo.AddrPort(l.Addr())))
 		require.NoError(t, err)
@@ -126,7 +126,7 @@ func TestUTPRawConn(t *testing.T) {
 		t.Fatalf("error dialing utp listener: %s", err)
 	}
 	defer utpPeer.Close()
-	peer, err := listenPacket("udp", ":0")
+	peer, err := inproc.ListenPacket("inproc", ":0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -362,7 +362,7 @@ func connPairSocket(s *Socket) (initer, accepted net.Conn) {
 }
 
 func connPair() (initer, accepted net.Conn) {
-	s, err := NewSocket("udp", "localhost:0")
+	s, err := NewSocket("inproc", ":0")
 	if err != nil {
 		panic(err)
 	}
@@ -493,8 +493,6 @@ func TestMain(m *testing.M) {
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		WriteStatus(w)
 	})
-	listenPacket = inproc.ListenPacket
-	resolveAddr = inproc.ResolveAddr
 	setDefaultTestingDurations()
 	code := m.Run()
 	WriteStatus(os.Stderr)
@@ -520,7 +518,7 @@ func init() {
 }
 
 func TestSaturateSocketConnIDs(t *testing.T) {
-	s, err := NewSocket("", "")
+	s, err := NewSocket("inproc", "")
 	require.NoError(t, err)
 	defer s.Close()
 	var acceptedConns, dialedConns []net.Conn
@@ -576,7 +574,7 @@ func TestWriteClose(t *testing.T) {
 // Check that Conn.Write fails when the PacketConn that Socket wraps is
 // closed.
 func TestWriteUnderlyingPacketConnClosed(t *testing.T) {
-	pc, err := listenPacket("udp", "localhost:0")
+	pc, err := listenPacket("inproc", "localhost:0")
 	require.NoError(t, err)
 	defer pc.Close()
 	s, err := NewSocketFromPacketConn(pc)
@@ -626,4 +624,30 @@ func TestFillBuffers(t *testing.T) {
 	assert.NoError(t, err)
 	assert.EqualValues(t, len(sent), len(all))
 	assert.EqualValues(t, sent, all)
+}
+
+func TestConnLocalRemoteAddr(t *testing.T) {
+	a, b := connPair()
+	assert.EqualValues(t, "utp/inproc", a.LocalAddr().Network())
+	assert.EqualValues(t, "utp/inproc", a.RemoteAddr().Network())
+	assert.EqualValues(t, "utp/inproc", b.LocalAddr().Network())
+	assert.EqualValues(t, "utp/inproc", b.RemoteAddr().Network())
+	assert.EqualValues(t, a.LocalAddr().String(), b.RemoteAddr().String())
+	assert.EqualValues(t, b.LocalAddr().String(), a.RemoteAddr().String())
+	a.Close()
+	b.Close()
+	udpConn, err := net.ListenPacket("udp", "localhost:0")
+	require.NoError(t, err)
+	udpSock, err := NewSocketFromPacketConn(udpConn)
+	require.NoError(t, err)
+	a, b = connPairSocket(udpSock)
+	udpSock.Close()
+	assert.EqualValues(t, "utp/udp", a.LocalAddr().Network())
+	assert.EqualValues(t, "utp/udp", a.RemoteAddr().Network())
+	assert.EqualValues(t, "utp/udp", b.LocalAddr().Network())
+	assert.EqualValues(t, "utp/udp", b.RemoteAddr().Network())
+	assert.EqualValues(t, a.LocalAddr().String(), b.RemoteAddr().String())
+	assert.EqualValues(t, b.LocalAddr().String(), a.RemoteAddr().String())
+	a.Close()
+	b.Close()
 }

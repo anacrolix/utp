@@ -27,8 +27,8 @@ type Conn struct {
 	readBuf  []byte
 	readCond sync.Cond
 
-	socket     *Socket
-	remoteAddr net.Addr
+	socket           *Socket
+	remoteSocketAddr net.Addr
 	// The uTP timestamp.
 	startTimestamp uint32
 	// When the conn was allocated.
@@ -137,9 +137,9 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 	}
 	p = append(p, payload...)
 	if logLevel >= 1 {
-		log.Printf("writing utp msg to %s: %s", c.remoteAddr, packetDebugString(&h, payload))
+		log.Printf("writing utp msg to %s: %s", c.remoteSocketAddr, packetDebugString(&h, payload))
 	}
-	n1, err := c.socket.writeTo(p, c.remoteAddr)
+	n1, err := c.socket.writeTo(p, c.remoteSocketAddr)
 	if err != nil {
 		return
 	}
@@ -385,7 +385,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 	if inboundIndex >= maxUnackedInbound {
 		// Discard packet too far ahead.
 		if logLevel >= 1 {
-			log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
+			log.Printf("received packet from %s %d ahead of next seqnr (%x > %x)", c.remoteSocketAddr, inboundIndex, h.SeqNr, c.ack_nr+1)
 		}
 		return
 	}
@@ -505,7 +505,7 @@ func (c *Conn) Close() (err error) {
 }
 
 func (c *Conn) LocalAddr() net.Addr {
-	return c.socket.Addr()
+	return addr{c.socket.Addr()}
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
@@ -539,7 +539,7 @@ func (c *Conn) Read(b []byte) (n int, err error) {
 }
 
 func (c *Conn) RemoteAddr() net.Addr {
-	return c.remoteAddr
+	return addr{c.remoteSocketAddr}
 }
 
 func (c *Conn) String() string {
