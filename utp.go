@@ -60,9 +60,9 @@ var (
 	unsentStatePackets = expvar.NewInt("utpUnsentStatePackets")
 	unusedReads        = expvar.NewInt("utpUnusedReads")
 	unusedReadsDropped = expvar.NewInt("utpUnusedReadsDropped")
-	sendBufferPool     = sync.Pool{
-		New: func() interface{} { return make([]byte, minMTU) },
-	}
+	// sendBufferPool     = sync.Pool{
+	// 	New: func() interface{} { return make([]byte, minMTU) },
+	// }
 	// This is the latency we assume on new connections. It should be higher
 	// than the latency we expect on most connections to prevent excessive
 	// resending to peers that take a long time to respond, before we've got a

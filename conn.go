@@ -129,9 +129,17 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 			Bytes: selAck,
 		}},
 	}
-	p := h.Marshal()
+	var p []byte
+	if len(payload) == 0 {
+		p = make([]byte, 0, maxHeaderSize)
+	} else {
+		p = make([]byte, 0, minMTU)
+		// p = sendBufferPool.Get().([]byte)[:0:minMTU]
+	}
+	n := h.Marshal(p)
+	p = p[:n]
 	// Extension headers are currently fixed in size.
-	if len(p) != maxHeaderSize {
+	if n != maxHeaderSize {
 		panic("header has unexpected size")
 	}
 	p = append(p, payload...)
@@ -202,7 +210,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	n = len(payload)
 	// Copy payload so caller to write can continue to use the buffer.
 	if payload != nil {
-		payload = append(sendBufferPool.Get().([]byte)[:0:minMTU], payload...)
+		payload = append([]byte(nil), payload...)
 	}
 	send := &send{
 		payloadSize: uint32(len(payload)),

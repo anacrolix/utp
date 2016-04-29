@@ -212,12 +212,15 @@ func (s *Socket) dispatch(read read) {
 
 // Send a reset in response to a packet with the given header.
 func (s *Socket) reset(addr net.Addr, ackNr, connId uint16) {
-	go s.writeTo((&header{
+	b := make([]byte, 0, maxHeaderSize)
+	h := header{
 		Type:    stReset,
 		Version: 1,
 		ConnID:  connId,
 		AckNr:   ackNr,
-	}).Marshal(), addr)
+	}
+	b = b[:h.Marshal(b)]
+	go s.writeTo(b, addr)
 }
 
 // Return a recv_id that should be free. Handling the case where it isn't is

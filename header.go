@@ -74,16 +74,14 @@ func (h *header) Unmarshal(b []byte) (n int, err error) {
 	return
 }
 
-func (h *header) Marshal() (ret []byte) {
-	hLen := 20 + func() (ret int) {
+func (h *header) Marshal(p []byte) (n int) {
+	n = 20 + func() (ret int) {
 		for _, ext := range h.Extensions {
 			ret += 2 + len(ext.Bytes)
 		}
 		return
 	}()
-	ret = sendBufferPool.Get().([]byte)[:hLen:minMTU]
-	// ret = make([]byte, hLen, minMTU)
-	p := ret // Used for manipulating ret.
+	p = p[:n]
 	p[0] = byte(h.Type<<4 | 1)
 	binary.BigEndian.PutUint16(p[2:4], h.ConnID)
 	binary.BigEndian.PutUint32(p[4:8], h.Timestamp)
