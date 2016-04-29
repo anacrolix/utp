@@ -264,9 +264,9 @@ func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 	c = &Conn{
-		socket:     s,
-		remoteAddr: addr,
-		created:    time.Now(),
+		socket:           s,
+		remoteSocketAddr: addr,
+		created:          time.Now(),
 	}
 	c.readCond.L = &mu
 	c.sendStateTimer = missinggo.StoppedFuncTimer(c.sendPendingStateUnlocked)
