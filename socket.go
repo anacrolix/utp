@@ -269,7 +269,7 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		created:          time.Now(),
 	}
 	c.readCond.L = &mu
-	c.sendStateTimer = missinggo.StoppedFuncTimer(c.sendPendingStateUnlocked)
+	c.sendPendingSendSendStateTimer = missinggo.StoppedFuncTimer(c.sendPendingSendStateTimerCallback)
 	c.packetReadTimeoutTimer = time.AfterFunc(packetReadTimeout, c.receivePacketTimeoutCallback)
 	missinggo.AddCondToFlags(
 		&c.readCond,

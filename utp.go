@@ -44,6 +44,11 @@ const (
 	maxUnackedSends   = 256
 
 	readBufferLen = 1 << 20 // ~1MiB
+
+	// How long to wait before sending a state packet, after one is required.
+	// This prevents spamming a state packet for every packet received, and
+	// non-state packets that are being sent also fill the role.
+	pendingSendStateDelay = 500 * time.Microsecond
 )
 
 var (
@@ -51,9 +56,11 @@ var (
 	// Inbound packets processed by a Conn.
 	deliveriesProcessed = expvar.NewInt("utpDeliveriesProcessed")
 	sentStatePackets    = expvar.NewInt("utpSentStatePackets")
-	unusedReads         = expvar.NewInt("utpUnusedReads")
-	unusedReadsDropped  = expvar.NewInt("utpUnusedReadsDropped")
-	sendBufferPool      = sync.Pool{
+	// State packets that we managed not to send.
+	unsentStatePackets = expvar.NewInt("utpUnsentStatePackets")
+	unusedReads        = expvar.NewInt("utpUnusedReads")
+	unusedReadsDropped = expvar.NewInt("utpUnusedReadsDropped")
+	sendBufferPool     = sync.Pool{
 		New: func() interface{} { return make([]byte, minMTU) },
 	}
 	// This is the latency we assume on new connections. It should be higher

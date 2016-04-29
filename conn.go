@@ -51,11 +51,11 @@ type Conn struct {
 	latencies []time.Duration
 
 	// We need to send state packet.
-	pendingSendState bool
-	sendStateTimer   *time.Timer
+	pendingSendState              bool
+	sendPendingSendSendStateTimer *time.Timer
 	// Send state is being delayed until sendStateTimer fires, which may have
 	// been set at the beginning of a batch of received packets.
-	batchingSendState bool
+	sendPendingSendStateTimerActive bool
 
 	// This timer fires when no packet has been received for a period.
 	packetReadTimeoutTimer *time.Timer
@@ -73,17 +73,16 @@ func (c *Conn) timestamp() uint32 {
 	return nowTimestamp() - c.startTimestamp
 }
 
-func (c *Conn) sendPendingStateUnlocked() {
+func (c *Conn) sendPendingSendStateTimerCallback() {
 	mu.Lock()
 	defer mu.Unlock()
+	c.sendPendingSendStateTimerActive = false
+	c.sendPendingSendSendStateTimer.Stop()
 	c.sendPendingState()
 }
 
+// Send a state packet, if one is needed.
 func (c *Conn) sendPendingState() {
-	c.batchingSendState = false
-	if !c.pendingSendState {
-		return
-	}
 	if c.destroyed.Get() {
 		c.sendReset()
 	} else {
@@ -146,16 +145,33 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 	if n1 != len(p) {
 		panic(n1)
 	}
-	c.unpendSendState()
+	if c.unpendSendState() && _type != stState {
+		// We needed to send a state packet, but this packet suppresses that
+		// need.
+		unsentStatePackets.Add(1)
+	}
 	return
 }
 
-func (me *Conn) unpendSendState() {
-	me.pendingSendState = false
+func (c *Conn) unpendSendState() (wasPending bool) {
+	wasPending = c.pendingSendState
+	c.pendingSendState = false
+	c.sendPendingSendSendStateTimer.Stop()
+	c.sendPendingSendStateTimerActive = false
+	return
 }
 
 func (c *Conn) pendSendState() {
+	if c.pendingSendState {
+		// A state packet is pending but hasn't been sent, and we want to send
+		// another.
+		unsentStatePackets.Add(1)
+	}
 	c.pendingSendState = true
+	if !c.sendPendingSendStateTimerActive {
+		c.sendPendingSendSendStateTimer.Reset(pendingSendStateDelay)
+		c.sendPendingSendStateTimerActive = true
+	}
 }
 
 func (me *Conn) writeSyn() {
@@ -319,12 +335,6 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 func (c *Conn) receivePacket(h header, payload []byte) {
 	c.packetReadTimeoutTimer.Reset(packetReadTimeout)
 	c.processDelivery(h, payload)
-	if !c.batchingSendState && c.pendingSendState {
-		// Set timer to send state ack for a series of packets received in
-		// quick succession.
-		c.batchingSendState = true
-		c.sendStateTimer.Reset(500 * time.Microsecond)
-	}
 }
 
 func (c *Conn) receivePacketTimeoutCallback() {
