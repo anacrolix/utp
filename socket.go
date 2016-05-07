@@ -386,10 +386,14 @@ func (s *Socket) backlogChanged() {
 
 func (s *Socket) nextSyn() (syn syn, ok bool) {
 	for {
+		mu.Lock()
+		closed := s.closed.C()
+		backlogNotEmpty := s.backlogNotEmpty.C()
+		mu.Unlock()
 		select {
-		case <-s.closed.C():
+		case <-closed:
 			return
-		case <-s.backlogNotEmpty.C():
+		case <-backlogNotEmpty:
 			mu.Lock()
 			for k := range s.backlog {
 				syn = k
