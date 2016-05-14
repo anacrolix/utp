@@ -112,6 +112,8 @@ func (s *Socket) pushBacklog(syn syn) {
 	if _, ok := s.backlog[syn]; ok {
 		return
 	}
+	// Pop a pseudo-random syn to make room. TODO: Use missinggo/orderedmap,
+	// coz that's what is wanted here.
 	for k := range s.backlog {
 		if len(s.backlog) < backlog {
 			break
@@ -475,6 +477,8 @@ func (s *Socket) lazyDestroy() {
 func (s *Socket) destroy() {
 	delete(sockets, s)
 	s.destroyed.Set()
+	// TODO: Perhaps we should only Close the PacketConn if we created it
+	// ourselves.
 	s.pc.Close()
 	for _, c := range s.conns {
 		c.destroy(errors.New("Socket destroyed"))
