@@ -585,10 +585,13 @@ func TestWriteUnderlyingPacketConnClosed(t *testing.T) {
 	defer ac.Close()
 	pc.Close()
 	n, err := ac.Write([]byte("hello"))
-	require.Equal(t, 0, n)
-	require.EqualError(t, err, "closed")
+	assert.Equal(t, 0, n)
+	// It has to fail. I think it's a race between us writing to the real
+	// PacketConn and getting "closed", and the Socket destroying itself, and
+	// we get it's destroy error.
+	assert.Error(t, err)
 	_, err = dc.Read(nil)
-	require.EqualError(t, err, "Socket destroyed")
+	assert.EqualError(t, err, "Socket destroyed")
 }
 
 func TestSetSocketDeadlines(t *testing.T) {
