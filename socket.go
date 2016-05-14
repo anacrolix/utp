@@ -34,7 +34,8 @@ type Socket struct {
 	backlogNotEmpty missinggo.Event
 	backlog         map[syn]struct{}
 
-	closed missinggo.Event
+	closed    missinggo.Event
+	destroyed missinggo.Event
 
 	unusedReads chan read
 	connDeadlines
@@ -406,6 +407,8 @@ func (s *Socket) nextSyn() (syn syn, ok bool) {
 			if ok {
 				return
 			}
+		case <-s.destroyed.LockedChan(&mu):
+			return
 		}
 	}
 }
@@ -471,6 +474,7 @@ func (s *Socket) lazyDestroy() {
 
 func (s *Socket) destroy() {
 	delete(sockets, s)
+	s.destroyed.Set()
 	s.pc.Close()
 	for _, c := range s.conns {
 		c.destroy(errors.New("Socket destroyed"))
