@@ -4,6 +4,7 @@ import (
 	"net"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -14,5 +15,5 @@ func TestAcceptOnDestroyedSocket(t *testing.T) {
 	require.NoError(t, err)
 	go pc.Close()
 	_, err = s.Accept()
-	t.Log(err)
+	assert.Contains(t, err.Error(), "use of closed network connection")
 }

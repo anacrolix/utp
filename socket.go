@@ -387,67 +387,67 @@ func (s *Socket) backlogChanged() {
 	}
 }
 
-func (s *Socket) nextSyn() (syn syn, ok bool) {
+func (s *Socket) nextSyn() (syn syn, err error) {
 	for {
-		mu.Lock()
-		closed := s.closed.C()
-		backlogNotEmpty := s.backlogNotEmpty.C()
 		mu.Unlock()
-		select {
-		case <-closed:
+		missinggo.WaitEvents(&mu, &s.closed, &s.backlogNotEmpty, &s.destroyed)
+		mu.Lock()
+		if s.closed.IsSet() {
+			err = errClosed
 			return
-		case <-backlogNotEmpty:
-			mu.Lock()
-			for k := range s.backlog {
-				syn = k
-				delete(s.backlog, k)
-				ok = true
-				break
-			}
+		}
+		if s.destroyed.IsSet() {
+			err = s.ReadErr
+			return
+		}
+		for k := range s.backlog {
+			syn = k
+			delete(s.backlog, k)
 			s.backlogChanged()
-			mu.Unlock()
-			if ok {
-				return
-			}
-		case <-s.destroyed.LockedChan(&mu):
 			return
 		}
 	}
 }
 
-// Accept and return a new uTP connection.
-func (s *Socket) Accept() (c net.Conn, err error) {
-	for {
-		syn, ok := s.nextSyn()
-		if !ok {
-			err = errClosed
-			return
+// ACK a SYN, and return a new Conn for it. ok is false if the SYN is bad, and
+// the Conn invalid.
+func (s *Socket) ackSyn(syn syn) (c *Conn, ok bool) {
+	c = s.newConn(s.strNetAddr(syn.addr))
+	c.send_id = syn.conn_id
+	c.recv_id = c.send_id + 1
+	c.seq_nr = uint16(rand.Int())
+	c.lastAck = c.seq_nr - 1
+	c.ack_nr = syn.seq_nr
+	c.sentSyn = true
+	c.synAcked = true
+	if !s.registerConn(c.recv_id, resolvedAddrStr(syn.addr), c) {
+		// SYN that triggered this accept duplicates existing connection.
+		// Ack again in case the SYN was a resend.
+		c = s.conns[connKey{resolvedAddrStr(syn.addr), c.recv_id}]
+		if c.send_id != syn.conn_id {
+			panic(":|")
 		}
-		mu.Lock()
-		_c := s.newConn(s.strNetAddr(syn.addr))
-		_c.send_id = syn.conn_id
-		_c.recv_id = _c.send_id + 1
-		_c.seq_nr = uint16(rand.Int())
-		_c.lastAck = _c.seq_nr - 1
-		_c.ack_nr = syn.seq_nr
-		_c.sentSyn = true
-		_c.synAcked = true
-		if !s.registerConn(_c.recv_id, resolvedAddrStr(syn.addr), _c) {
-			// SYN that triggered this accept duplicates existing connection.
-			// Ack again in case the SYN was a resend.
-			_c = s.conns[connKey{resolvedAddrStr(syn.addr), _c.recv_id}]
-			if _c.send_id != syn.conn_id {
-				panic(":|")
-			}
-			_c.sendState()
-			mu.Unlock()
-			continue
-		}
-		_c.sendState()
-		// _c.seq_nr++
-		c = _c
-		mu.Unlock()
+		c.sendState()
 		return
+	}
+	c.sendState()
+	ok = true
+	return
+}
+
+// Accept and return a new uTP connection.
+func (s *Socket) Accept() (net.Conn, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	for {
+		syn, err := s.nextSyn()
+		if err != nil {
+			return nil, err
+		}
+		c, ok := s.ackSyn(syn)
+		if ok {
+			return c, nil
+		}
 	}
 }
 
