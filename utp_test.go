@@ -133,7 +133,7 @@ func TestUTPRawConn(t *testing.T) {
 	defer peer.Close()
 
 	msgsReceived := 0
-	const N = 5000 // How many messages to send.
+	const N = 500 // How many messages to send.
 	readerStopped := make(chan struct{})
 	// The reader goroutine.
 	go func() {
@@ -161,7 +161,7 @@ func TestUTPRawConn(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(10 * time.Microsecond)
+		time.Sleep(100 * time.Microsecond)
 	}
 	select {
 	case <-readerStopped:
