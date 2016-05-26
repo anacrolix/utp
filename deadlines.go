@@ -8,12 +8,12 @@ import (
 
 type deadline struct {
 	t      time.Time
-	passed missinggo.Flag
+	passed missinggo.Event
 	timer  *time.Timer
 }
 
 func (me *deadline) set(t time.Time) {
-	me.passed.Set(false)
+	me.passed.Clear()
 	me.t = t
 	me.timer = time.AfterFunc(0, me.callback)
 }
@@ -28,8 +28,7 @@ func (me *deadline) callback() {
 		me.timer.Reset(me.t.Sub(time.Now()))
 		return
 	}
-	me.passed.Set(true)
-	cond.Broadcast()
+	me.passed.Set()
 }
 
 // This is embedded in Conn to provide deadline methods for net.Conn. It

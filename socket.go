@@ -274,15 +274,8 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 		remoteSocketAddr: addr,
 		created:          time.Now(),
 	}
-	c.readCond.L = &mu
 	c.sendPendingSendSendStateTimer = missinggo.StoppedFuncTimer(c.sendPendingSendStateTimerCallback)
 	c.packetReadTimeoutTimer = time.AfterFunc(packetReadTimeout, c.receivePacketTimeoutCallback)
-	missinggo.AddCondToFlags(
-		&c.readCond,
-		&c.destroyed,
-		&c.gotFin,
-		&c.closed,
-		&c.connDeadlines.read.passed)
 	return
 }
 
@@ -349,6 +342,7 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 		mu.Unlock()
 		return
 	}
+	c.updateCanWrite()
 	nc = pproffd.WrapNetConn(c)
 	return
 }
@@ -389,9 +383,7 @@ func (s *Socket) backlogChanged() {
 
 func (s *Socket) nextSyn() (syn syn, err error) {
 	for {
-		mu.Unlock()
 		missinggo.WaitEvents(&mu, &s.closed, &s.backlogNotEmpty, &s.destroyed)
-		mu.Lock()
 		if s.closed.IsSet() {
 			err = errClosed
 			return
@@ -420,6 +412,7 @@ func (s *Socket) ackSyn(syn syn) (c *Conn, ok bool) {
 	c.ack_nr = syn.seq_nr
 	c.sentSyn = true
 	c.synAcked = true
+	c.updateCanWrite()
 	if !s.registerConn(c.recv_id, resolvedAddrStr(syn.addr), c) {
 		// SYN that triggered this accept duplicates existing connection.
 		// Ack again in case the SYN was a resend.
@@ -446,6 +439,7 @@ func (s *Socket) Accept() (net.Conn, error) {
 		}
 		c, ok := s.ackSyn(syn)
 		if ok {
+			c.updateCanWrite()
 			return c, nil
 		}
 	}
