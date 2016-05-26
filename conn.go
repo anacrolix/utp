@@ -333,7 +333,7 @@ func (c *Conn) ackSkipped(seqNr uint16) {
 	switch send.acksSkipped {
 	case 3, 60:
 		ackSkippedResends.Add(1)
-		go send.resend()
+		send.resend()
 		send.resendTimer.Reset(c.resendTimeout() * time.Duration(send.numResends))
 	default:
 	}
