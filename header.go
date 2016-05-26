@@ -103,6 +103,7 @@ func (h *header) Marshal(p []byte) (n int) {
 		}
 		p = p[2+len(ext.Bytes):]
 	}
+	*_type = 0
 	if len(p) != 0 {
 		panic("header length changed")
 	}
