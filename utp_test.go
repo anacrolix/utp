@@ -654,3 +654,34 @@ func TestConnLocalRemoteAddr(t *testing.T) {
 	a.Close()
 	b.Close()
 }
+
+func BenchmarkEchoLongBuffer(tb *testing.B) {
+	pristine := make([]byte, 10000000)
+	n, err := io.ReadFull(rand.Reader, pristine)
+	require.EqualValues(tb, len(pristine), n)
+	require.NoError(tb, err)
+	for range iter.N(tb.N) {
+		func() {
+			a, b := connPair()
+			defer a.Close()
+			defer b.Close()
+			go func() {
+				n, err := io.Copy(b, b)
+				require.NoError(tb, err)
+				require.EqualValues(tb, len(pristine), n)
+				b.Close()
+			}()
+			go func() {
+				n, err := a.Write(pristine)
+				require.NoError(tb, err)
+				require.EqualValues(tb, len(pristine), n)
+			}()
+			echo := make([]byte, len(pristine))
+			n, err := io.ReadFull(a, echo)
+			a.Close()
+			assert.NoError(tb, err)
+			require.EqualValues(tb, len(echo), n)
+			require.True(tb, bytes.Equal(pristine, echo))
+		}()
+	}
+}
