@@ -35,7 +35,7 @@ const (
 	recvWindow = 1 << 18 // 256KiB
 	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
 	// ACK.
-	maxHeaderSize  = 30
+	maxHeaderSize  = 34
 	maxPayloadSize = minMTU - maxHeaderSize
 	maxRecvSize    = 0x2000
 
