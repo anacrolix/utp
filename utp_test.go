@@ -680,7 +680,7 @@ func TestConnLocalRemoteAddr(t *testing.T) {
 }
 
 func BenchmarkEchoLongBuffer(tb *testing.B) {
-	pristine := make([]byte, 10000000)
+	pristine := make([]byte, 20000000)
 	n, err := io.ReadFull(rand.Reader, pristine)
 	require.EqualValues(tb, len(pristine), n)
 	require.NoError(tb, err)
