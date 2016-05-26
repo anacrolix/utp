@@ -1,6 +1,7 @@
 package utp
 
 import (
+	"bytes"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -478,11 +479,31 @@ func TestPacketReadTimeout(t *testing.T) {
 }
 
 func sleepWhile(l sync.Locker, cond func() bool) {
+	sleepWhileTimeout(l, cond, -1)
 	for {
 		l.Lock()
 		val := cond()
 		l.Unlock()
 		if !val {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func sleepWhileTimeout(l sync.Locker, cond func() bool, timeout time.Duration) {
+	var deadline time.Time
+	if timeout >= 0 {
+		deadline = time.Now().Add(timeout)
+	}
+	for {
+		l.Lock()
+		val := cond()
+		l.Unlock()
+		if !val {
+			break
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -495,12 +516,15 @@ func TestMain(m *testing.M) {
 	})
 	setDefaultTestingDurations()
 	code := m.Run()
-	WriteStatus(os.Stderr)
+	sleepWhileTimeout(&mu, func() bool {
+		return len(sockets) != 0
+	}, time.Second)
 	mu.Lock()
 	numSockets := len(sockets)
 	mu.Unlock()
 	if numSockets != 0 {
 		code = 1
+		WriteStatus(os.Stderr)
 	}
 	os.Exit(code)
 }
