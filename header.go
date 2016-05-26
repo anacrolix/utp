@@ -42,7 +42,7 @@ func unmarshalExtensions(_type byte, b []byte) (n int, ef []extensionField, err 
 		}
 		ef = append(ef, extensionField{
 			Type:  _type,
-			Bytes: append([]byte{}, b[2:int(b[1])+2]...),
+			Bytes: append([]byte(nil), b[2:int(b[1])+2]...),
 		})
 		_type = b[0]
 		n += 2 + int(b[1])
