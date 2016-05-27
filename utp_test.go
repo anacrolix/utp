@@ -684,6 +684,8 @@ func BenchmarkEchoLongBuffer(tb *testing.B) {
 	n, err := io.ReadFull(rand.Reader, pristine)
 	require.EqualValues(tb, len(pristine), n)
 	require.NoError(tb, err)
+	tb.SetBytes(int64(len(pristine)))
+	tb.ResetTimer()
 	for range iter.N(tb.N) {
 		func() {
 			a, b := connPair()
