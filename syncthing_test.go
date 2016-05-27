@@ -36,6 +36,7 @@ func getUTPConnectionPair() (net.Conn, net.Conn, error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	defer lst.Close()
 
 	var conn0 net.Conn
 	var err0 error
