@@ -342,7 +342,9 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 		mu.Unlock()
 		return
 	}
+	mu.Lock()
 	c.updateCanWrite()
+	mu.Unlock()
 	nc = pproffd.WrapNetConn(c)
 	return
 }
