@@ -122,3 +122,10 @@ func BenchmarkSyncthingUDPUTP(b *testing.B) {
 
 	benchConnPair(b, conn0, conn1)
 }
+
+func BenchmarkSyncthingInprocUTP(b *testing.B) {
+	c0, c1 := connPair()
+	defer c0.Close()
+	defer c1.Close()
+	benchConnPair(b, c0, c1)
+}
