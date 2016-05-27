@@ -99,7 +99,7 @@ func benchConnPair(b *testing.B, c0, c1 net.Conn) {
 	}
 }
 
-func BenchmarkTCP(b *testing.B) {
+func BenchmarkSyncthingTCP(b *testing.B) {
 	conn0, conn1, err := getTCPConnectionPair()
 	if err != nil {
 		b.Fatal(err)
@@ -111,7 +111,7 @@ func BenchmarkTCP(b *testing.B) {
 	benchConnPair(b, conn0, conn1)
 }
 
-func BenchmarkUTP(b *testing.B) {
+func BenchmarkSyncthingUDPUTP(b *testing.B) {
 	conn0, conn1, err := getUTPConnectionPair()
 	if err != nil {
 		b.Fatal(err)
