@@ -25,11 +25,16 @@ func TestAcceptOnDestroyedSocket(t *testing.T) {
 	assert.Contains(t, err.Error(), "use of closed network connection")
 }
 
-func TestSetSocketDeadlines(t *testing.T) {
+func TestSocketDeadlines(t *testing.T) {
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
-	assert.NoError(t, s.SetReadDeadline(time.Now().Add(time.Second)))
-	assert.NoError(t, s.SetWriteDeadline(time.Now().Add(time.Second)))
+	defer s.Close()
+	assert.NoError(t, s.SetReadDeadline(time.Now()))
+	_, _, err = s.ReadFrom(nil)
+	assert.Equal(t, errTimeout, err)
+	assert.NoError(t, s.SetWriteDeadline(time.Now()))
+	_, err = s.WriteTo(nil, nil)
+	assert.Equal(t, errTimeout, err)
 	assert.NoError(t, s.SetDeadline(time.Time{}))
 	assert.NoError(t, s.Close())
 }

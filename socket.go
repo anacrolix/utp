@@ -486,15 +486,29 @@ func (s *Socket) LocalAddr() net.Addr {
 }
 
 func (s *Socket) ReadFrom(p []byte) (n int, addr net.Addr, err error) {
-	read, ok := <-s.unusedReads
-	if !ok {
-		err = io.EOF
+	select {
+	case read, ok := <-s.unusedReads:
+		if !ok {
+			err = io.EOF
+			return
+		}
+		n = copy(p, read.data)
+		addr = read.from
+		return
+	case <-s.connDeadlines.read.passed.LockedChan(&mu):
+		err = errTimeout
+		return
 	}
-	n = copy(p, read.data)
-	addr = read.from
-	return
 }
 
-func (s *Socket) WriteTo(b []byte, addr net.Addr) (int, error) {
+func (s *Socket) WriteTo(b []byte, addr net.Addr) (n int, err error) {
+	mu.Lock()
+	if s.connDeadlines.write.passed.IsSet() {
+		err = errTimeout
+	}
+	mu.Unlock()
+	if err != nil {
+		return
+	}
 	return s.pc.WriteTo(b, addr)
 }

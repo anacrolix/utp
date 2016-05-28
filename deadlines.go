@@ -13,9 +13,20 @@ type deadline struct {
 }
 
 func (me *deadline) set(t time.Time) {
-	me.passed.Clear()
 	me.t = t
-	me.timer = time.AfterFunc(0, me.callback)
+	if time.Now().After(t) {
+		me.passed.Set()
+		if me.timer != nil {
+			me.timer.Stop()
+		}
+	} else {
+		me.passed.Clear()
+		if me.timer == nil {
+			me.timer = time.AfterFunc(me.t.Sub(time.Now()), me.callback)
+		} else {
+			me.timer.Reset(me.t.Sub(time.Now()))
+		}
+	}
 }
 
 func (me *deadline) callback() {
@@ -31,8 +42,8 @@ func (me *deadline) callback() {
 	me.passed.Set()
 }
 
-// This is embedded in Conn to provide deadline methods for net.Conn. It
-// tickles global mu and cond as required.
+// This is embedded in Conn and Socket to provide deadline methods for
+// net.Conn.
 type connDeadlines struct {
 	read, write deadline
 }
