@@ -14,32 +14,32 @@ type deadline struct {
 
 func (me *deadline) set(t time.Time) {
 	me.t = t
-	if time.Now().After(t) {
-		me.passed.Set()
-		if me.timer != nil {
-			me.timer.Stop()
-		}
-	} else {
-		me.passed.Clear()
+	me.passed.Clear()
+	if me.timer != nil {
+		me.timer.Stop()
+	}
+	me.update()
+}
+
+func (me *deadline) update() {
+	if me.t.IsZero() {
+		return
+	}
+	if time.Now().Before(me.t) {
 		if me.timer == nil {
 			me.timer = time.AfterFunc(me.t.Sub(time.Now()), me.callback)
 		} else {
 			me.timer.Reset(me.t.Sub(time.Now()))
 		}
+		return
 	}
+	me.passed.Set()
 }
 
 func (me *deadline) callback() {
 	mu.Lock()
 	defer mu.Unlock()
-	if me.t.IsZero() {
-		return
-	}
-	if time.Now().Before(me.t) {
-		me.timer.Reset(me.t.Sub(time.Now()))
-		return
-	}
-	me.passed.Set()
+	me.update()
 }
 
 // This is embedded in Conn and Socket to provide deadline methods for

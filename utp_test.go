@@ -121,8 +121,8 @@ func TestConnReadDeadline(t *testing.T) {
 	_, err := c.Read(nil)
 	require.Equal(t, errTimeout, err)
 	// The deadline has passed.
-	if !time.Now().After(dl) {
-		t.FailNow()
+	if time.Now().Before(dl) {
+		t.Fatal("deadline hasn't passed")
 	}
 	// Returns timeout on subsequent read.
 	_, err = c.Read(nil)
@@ -137,7 +137,7 @@ func TestConnReadDeadline(t *testing.T) {
 	select {
 	case <-readReturned:
 		// Read returned but shouldn't have.
-		t.FailNow()
+		t.Fatal("read returned")
 	case <-time.After(time.Millisecond):
 	}
 	c.Close()
