@@ -1,8 +1,12 @@
 package utp
 
 import (
+	"io"
 	"net"
+	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func getTCPConnectionPair() (net.Conn, net.Conn, error) {
@@ -59,43 +63,47 @@ func getUTPConnectionPair() (net.Conn, net.Conn, error) {
 	return conn0, conn1, nil
 }
 
+func requireWriteAll(t testing.TB, b []byte, w io.Writer) {
+	n, err := w.Write(b)
+	require.NoError(t, err)
+	require.EqualValues(t, len(b), n)
+}
+
+func requireReadExactly(t testing.TB, b []byte, r io.Reader) {
+	n, err := io.ReadFull(r, b)
+	require.NoError(t, err)
+	require.EqualValues(t, len(b), n)
+}
+
 func benchConnPair(b *testing.B, c0, c1 net.Conn) {
 	b.ReportAllocs()
-	b.SetBytes(128 << 10)
-	b.ResetTimer()
-
 	request := make([]byte, 52)
 	response := make([]byte, (128<<10)+8)
-
-	pair := []net.Conn{c0, c1}
+	b.SetBytes(int64(len(request) + len(response)))
+	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if i%2 == 0 {
-			pair[0] = c0
-			pair[1] = c1
-		} else {
-			pair[0] = c1
-			pair[1] = c0
-		}
-
-		if _, err := pair[0].Write(request); err != nil {
-			b.Fatal(err)
-		}
-
-		if _, err := pair[1].Read(request[:8]); err != nil {
-			b.Fatal(err)
-		}
-		if _, err := pair[1].Read(request[8:]); err != nil {
-			b.Fatal(err)
-		}
-		if _, err := pair[1].Write(response); err != nil {
-			b.Fatal(err)
-		}
-		if _, err := pair[0].Read(response[:8]); err != nil {
-			b.Fatal(err)
-		}
-		if _, err := pair[0].Read(response[8:]); err != nil {
-			b.Fatal(err)
-		}
+		c, s := func() (net.Conn, net.Conn) {
+			if i%2 == 0 {
+				return c0, c1
+			} else {
+				return c1, c0
+			}
+		}()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			requireWriteAll(b, request, c)
+			requireReadExactly(b, response[:8], c)
+			requireReadExactly(b, response[8:], c)
+		}()
+		go func() {
+			defer wg.Done()
+			requireReadExactly(b, request[:8], s)
+			requireReadExactly(b, request[8:], s)
+			requireWriteAll(b, response, s)
+		}()
+		wg.Wait()
 	}
 }
 
