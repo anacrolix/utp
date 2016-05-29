@@ -29,6 +29,10 @@ func (s *send) Ack() (latency time.Duration, first bool) {
 	if first {
 		latency = missinggo.MonotonicSince(s.started)
 	}
+	if s.payload != nil {
+		sendBufferPool.Put(s.payload[:0:minMTU])
+		s.payload = nil
+	}
 	s.acked.Set()
 	if s.resendTimer != nil {
 		s.resendTimer.Stop()

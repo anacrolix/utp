@@ -128,12 +128,7 @@ func (c *Conn) makePacket(_type st, connID, seqNr uint16, payload []byte) (p []b
 			Bytes: selAck,
 		}},
 	}
-	if len(payload) == 0 {
-		p = make([]byte, 0, maxHeaderSize)
-	} else {
-		p = make([]byte, 0, minMTU)
-		// p = sendBufferPool.Get().([]byte)[:0:minMTU]
-	}
+	p = sendBufferPool.Get().([]byte)[:0:minMTU]
 	n := h.Marshal(p)
 	p = p[:n]
 	// Extension headers are currently fixed in size.
@@ -148,6 +143,7 @@ func (c *Conn) makePacket(_type st, connID, seqNr uint16, payload []byte) (p []b
 func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err error) {
 	p := c.makePacket(_type, connID, seqNr, payload)
 	n1, err := c.socket.writeTo(p, c.remoteSocketAddr)
+	sendBufferPool.Put(p[:0:minMTU])
 	if err != nil {
 		return
 	}
@@ -211,7 +207,7 @@ func (c *Conn) write(_type st, connID uint16, payload []byte, seqNr uint16) (n i
 	n = len(payload)
 	// Copy payload so caller to write can continue to use the buffer.
 	if payload != nil {
-		payload = append([]byte(nil), payload...)
+		payload = append(sendBufferPool.Get().([]byte)[:0:minMTU], payload...)
 	}
 	send := &send{
 		payloadSize: uint32(len(payload)),
