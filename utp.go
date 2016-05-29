@@ -13,7 +13,6 @@ package utp
 
 import (
 	"errors"
-	"expvar"
 	"fmt"
 	"net"
 	"os"
@@ -51,14 +50,6 @@ const (
 )
 
 var (
-	ackSkippedResends = expvar.NewInt("utpAckSkippedResends")
-	// Inbound packets processed by a Conn.
-	deliveriesProcessed = expvar.NewInt("utpDeliveriesProcessed")
-	sentStatePackets    = expvar.NewInt("utpSentStatePackets")
-	// State packets that we managed not to send.
-	unsentStatePackets = expvar.NewInt("utpUnsentStatePackets")
-	unusedReads        = expvar.NewInt("utpUnusedReads")
-	unusedReadsDropped = expvar.NewInt("utpUnusedReadsDropped")
 	// sendBufferPool     = sync.Pool{
 	// 	New: func() interface{} { return make([]byte, minMTU) },
 	// }

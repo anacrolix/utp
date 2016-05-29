@@ -147,6 +147,13 @@ func (s *Socket) reader() {
 	}
 }
 
+func receivedUTPPacketSize(n int) {
+	if n > largestReceivedUTPPacket {
+		largestReceivedUTPPacket = n
+		largestReceivedUTPPacketExpvar.Set(int64(n))
+	}
+}
+
 func (s *Socket) dispatch(read read) {
 	b := read.data
 	addr := read.from
@@ -187,6 +194,7 @@ func (s *Socket) dispatch(read read) {
 				panic("bad assumption")
 			}
 		}
+		receivedUTPPacketSize(len(b))
 		c.receivePacket(h, b[hEnd:])
 		return
 	}
