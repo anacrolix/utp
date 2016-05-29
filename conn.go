@@ -101,8 +101,7 @@ func (c *Conn) wndSize() uint32 {
 	return recvWindow - buffered
 }
 
-// Send the given payload with an up to date header.
-func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err error) {
+func (c *Conn) makePacket(_type st, connID, seqNr uint16, payload []byte) (p []byte) {
 	// Always selectively ack the first 64 packets. Don't bother with rest for
 	// now.
 	selAck := selectiveAckBitmask(make([]byte, 8))
@@ -129,7 +128,6 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 			Bytes: selAck,
 		}},
 	}
-	var p []byte
 	if len(payload) == 0 {
 		p = make([]byte, 0, maxHeaderSize)
 	} else {
@@ -143,9 +141,12 @@ func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err 
 		panic("header has unexpected size")
 	}
 	p = append(p, payload...)
-	if logLevel >= 1 {
-		log.Printf("writing utp msg to %s: %s", c.remoteSocketAddr, packetDebugString(&h, payload))
-	}
+	return
+}
+
+// Send the given payload with an up to date header.
+func (c *Conn) send(_type st, connID uint16, payload []byte, seqNr uint16) (err error) {
+	p := c.makePacket(_type, connID, seqNr, payload)
 	n1, err := c.socket.writeTo(p, c.remoteSocketAddr)
 	if err != nil {
 		return
