@@ -256,6 +256,13 @@ func (c *Conn) sendReset() {
 	c.send(stReset, c.send_id, nil, c.seq_nr)
 }
 
+func (c *Conn) addLatency(l time.Duration) {
+	c.latencies = append(c.latencies, l)
+	if len(c.latencies) > 10 {
+		c.latencies = c.latencies[len(c.latencies)-10:]
+	}
+}
+
 // Ack our send with the given sequence number.
 func (c *Conn) ack(nr uint16) {
 	if !seqLess(c.lastAck, nr) {
@@ -272,10 +279,7 @@ func (c *Conn) ack(nr uint16) {
 	if first {
 		c.cur_window -= s.payloadSize
 		c.updateCanWrite()
-		c.latencies = append(c.latencies, latency)
-		if len(c.latencies) > 10 {
-			c.latencies = c.latencies[len(c.latencies)-10:]
-		}
+		c.addLatency(latency)
 	}
 	// Trim sends that aren't needed anymore.
 	for len(c.unackedSends) != 0 {
