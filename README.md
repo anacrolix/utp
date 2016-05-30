@@ -11,9 +11,7 @@ Package utp implements uTP, the micro transport protocol as used with Bittorrent
 
 ## Implementation characteristics
 
- * Receive window size is used to limit out of order packets received.
- * There is no MTU path discovery. The minimum size is always used.
+ * There is no MTU path discovery.
  * A fixed 64 slot selective ack window is used in both sending and receiving.
- * All received non-ACK packets are ACKed in response.
 
 Patches welcomed.
