@@ -94,7 +94,6 @@ func TestUTPRawConn(t *testing.T) {
 		}
 	}()
 	// Connect a UTP peer to see if the RawConn will still work.
-	log.Print("dialing")
 	utpPeer := func() net.Conn {
 		s, _ := NewSocket("inproc", "")
 		defer s.Close()
@@ -102,7 +101,6 @@ func TestUTPRawConn(t *testing.T) {
 		require.NoError(t, err)
 		return ret
 	}()
-	log.Print("dial returned")
 	if err != nil {
 		t.Fatalf("error dialing utp listener: %s", err)
 	}

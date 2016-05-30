@@ -47,21 +47,17 @@ func TestUTPPingPong(t *testing.T) {
 		buf := make([]byte, 4)
 		b.Read(buf)
 		require.EqualValues(t, "pong", buf)
-		log.Printf("got pong")
 	}()
 	a, err := s.Accept()
 	require.NoError(t, err)
 	defer a.Close()
-	log.Printf("accepted %s", a)
 	buf := make([]byte, 42)
 	n, err := a.Read(buf)
 	require.NoError(t, err)
 	require.EqualValues(t, "ping", buf[:n])
-	log.Print("got ping")
 	n, err = a.Write([]byte("pong"))
 	require.NoError(t, err)
 	require.Equal(t, 4, n)
-	log.Print("waiting for pinger to close")
 	<-pingerClosed
 }
 
@@ -330,9 +326,7 @@ func TestCloseDetachesQuickly(t *testing.T) {
 	defer s.Close()
 	go func() {
 		a, _ := s.Dial(s.Addr().String())
-		log.Print("close a")
 		a.Close()
-		log.Print("closed a")
 	}()
 	b, _ := s.Accept()
 	b.Close()
