@@ -30,8 +30,7 @@ const (
 	backlog = 50
 
 	// IPv6 min MTU is 1280, -40 for IPv6 header, and ~8 for fragment header?
-	minMTU     = 1438
-	recvWindow = 1 << 18 // 256KiB
+	minMTU = 1438
 	// uTP header of 20, +2 for the next extension, and 8 bytes of selective
 	// ACK.
 	maxHeaderSize  = 30

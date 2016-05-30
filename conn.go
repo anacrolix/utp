@@ -46,7 +46,7 @@ type Conn struct {
 	unackedSends []*send
 	// Inbound payloads, the first is ack_nr+1.
 	inbound    []recv
-	inboundWnd uint32
+	inboundWnd int
 	connDeadlines
 	latencies []time.Duration
 
@@ -90,15 +90,13 @@ func (c *Conn) sendPendingState() {
 	}
 }
 
+// So far as the spec makes clear, this is how many more, as-yet-unacked bytes
+// we can fit into our receive buffers.
 func (c *Conn) wndSize() uint32 {
-	if len(c.inbound) > maxUnackedInbound/2 {
+	if len(c.readBuf)+c.inboundWnd > readBufferLen {
 		return 0
 	}
-	buffered := uint32(len(c.readBuf)) + c.inboundWnd
-	if buffered > recvWindow {
-		return 0
-	}
-	return recvWindow - buffered
+	return uint32(readBufferLen - len(c.readBuf) - c.inboundWnd)
 }
 
 func (c *Conn) makePacket(_type st, connID, seqNr uint16, payload []byte) (p []byte) {
@@ -415,7 +413,7 @@ func (c *Conn) processDelivery(h header, payload []byte) {
 		c.inbound = append(c.inbound, recv{})
 	}
 	c.inbound[inboundIndex] = recv{true, payload, h.Type}
-	c.inboundWnd += uint32(len(payload))
+	c.inboundWnd += len(payload)
 	c.processInbound()
 }
 
@@ -461,7 +459,7 @@ func (c *Conn) processInbound() {
 		c.ack_nr++
 		p := c.inbound[0]
 		c.inbound = c.inbound[1:]
-		c.inboundWnd -= uint32(len(p.data))
+		c.inboundWnd -= len(p.data)
 		c.readBuf = append(c.readBuf, p.data...)
 		c.updateReadBufNotEmpty()
 		if p.Type == stFin {
