@@ -102,11 +102,8 @@ func (c *Conn) wndSize() uint32 {
 func (c *Conn) makePacket(_type st, connID, seqNr uint16, payload []byte) (p []byte) {
 	// Always selectively ack the first 64 packets. Don't bother with rest for
 	// now.
-	selAck := selectiveAckBitmask(make([]byte, 8))
-	for i := 1; i < 65; i++ {
-		if len(c.inbound) <= i {
-			break
-		}
+	var selAck selectiveAckBitmask
+	for i := 1; i < len(c.inbound); i++ {
 		if c.inbound[i].seen {
 			selAck.SetBit(i - 1)
 		}
@@ -123,14 +120,14 @@ func (c *Conn) makePacket(_type st, connID, seqNr uint16, payload []byte) (p []b
 		// Currently always send an 8 byte selective ack.
 		Extensions: []extensionField{{
 			Type:  extensionTypeSelectiveAck,
-			Bytes: selAck,
+			Bytes: selAck.Bytes,
 		}},
 	}
 	p = sendBufferPool.Get().([]byte)[:0:minMTU]
 	n := h.Marshal(p)
 	p = p[:n]
 	// Extension headers are currently fixed in size.
-	if n != maxHeaderSize {
+	if n > maxHeaderSize {
 		panic("header has unexpected size")
 	}
 	p = append(p, payload...)
@@ -423,7 +420,7 @@ func (c *Conn) applyAcks(h header) {
 		switch ext.Type {
 		case extensionTypeSelectiveAck:
 			c.ackSkipped(h.AckNr + 1)
-			bitmask := selectiveAckBitmask(ext.Bytes)
+			bitmask := selectiveAckBitmask{ext.Bytes}
 			for i := 0; i < bitmask.NumBits(); i++ {
 				if bitmask.BitIsSet(i) {
 					nr := h.AckNr + 2 + uint16(i)
