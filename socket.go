@@ -67,7 +67,7 @@ func NewSocket(network, addr string) (s *Socket, err error) {
 
 // Create a Socket, using the provided net.PacketConn. If you want to retain
 // use of the net.PacketConn after the Socket closes it, override your
-// net.PacketConn's Close method.
+// net.PacketConn's Close method, or use NetSocketFromPacketConnNoClose.
 func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	s = &Socket{
 		backlog: make(map[syn]struct{}, backlog),
@@ -80,6 +80,12 @@ func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	mu.Unlock()
 	go s.reader()
 	return
+}
+
+// Create a Socket using the provided PacketConn, that doesn't close the
+// PacketConn when the Socket is closed.
+func NewSocketFromPacketConnNoClose(pc net.PacketConn) (s *Socket, err error) {
+	return NewSocketFromPacketConn(packetConnNopCloser{pc})
 }
 
 func (s *Socket) unusedRead(read read) {
@@ -481,8 +487,6 @@ func (s *Socket) lazyDestroy() {
 func (s *Socket) destroy() {
 	delete(sockets, s)
 	s.destroyed.Set()
-	// TODO: Perhaps we should only Close the PacketConn if we created it
-	// ourselves.
 	s.pc.Close()
 	for _, c := range s.conns {
 		c.destroy(errors.New("Socket destroyed"))
