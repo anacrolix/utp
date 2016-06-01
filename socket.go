@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/rand"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -142,9 +143,16 @@ func (s *Socket) reader() {
 		mu.Unlock()
 		n, addr, err := s.pc.ReadFrom(b[:])
 		mu.Lock()
-		if err != nil {
-			s.ReadErr = err
+		if s.destroyed.IsSet() {
 			return
+		}
+		if err != nil {
+			if strings.Contains(err.Error(), "use of closed network connection") || err == io.EOF {
+				s.ReadErr = err
+				return
+			}
+			log.Printf("error reading Socket PacketConn: %s", err)
+			continue
 		}
 		s.dispatch(read{
 			append([]byte(nil), b[:n]...),
