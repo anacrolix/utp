@@ -53,8 +53,8 @@ func listenPacket(network, addr string) (pc net.PacketConn, err error) {
 	return net.ListenPacket(network, addr)
 }
 
-// addr is used to create a listening UDP conn which becomes the underlying
-// net.PacketConn for the Socket.
+// NewSocket creates a net.PacketConn with the given network and address, and
+// returns a Socket dispatching on it.
 func NewSocket(network, addr string) (s *Socket, err error) {
 	if network == "" {
 		network = "udp"
@@ -67,7 +67,7 @@ func NewSocket(network, addr string) (s *Socket, err error) {
 }
 
 // Create a Socket, using the provided net.PacketConn. If you want to retain
-// use of the net.PacketConn after the Socket closes it, override your
+// use of the net.PacketConn after the Socket closes it, override the
 // net.PacketConn's Close method, or use NetSocketFromPacketConnNoClose.
 func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	s = &Socket{
