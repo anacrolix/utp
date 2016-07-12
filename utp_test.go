@@ -561,3 +561,49 @@ func BenchmarkEchoLongBuffer(tb *testing.B) {
 		}()
 	}
 }
+
+// Create a utp.Conn between two Sockets. Then axe one before it can cry for
+// help. Check that the other still destroys its underlying UDP PacketConn
+// when the Socket and Conn are closed.
+func TestSocketDestroyedConnsClosedTimeout(t *testing.T) {
+	s1pc, err := net.ListenPacket("udp", "localhost:0")
+	require.NoError(t, err)
+	s1, err := NewSocketFromPacketConnNoClose(s1pc)
+	require.NoError(t, err)
+	s2, err := NewSocket("", "localhost:0")
+	require.NoError(t, err)
+	accepted := make(chan struct{})
+	var s1c net.Conn
+	go func() {
+		var err error
+		s1c, err = s1.Accept()
+		close(accepted)
+		require.NoError(t, err)
+	}()
+	s2c, err := s2.Dial(s1.Addr().String())
+	require.NoError(t, err)
+	<-accepted
+	// Axe Socket 1's PacketConn.
+	s1pc.Close()
+	// Now its wrappers, that may be confused right now.
+	s1.Close()
+	// s1 should have been destroyed.
+	<-s1.destroyed.LockedChan(&mu)
+	s1c.Close()
+	// Check that we can now listen in Socket 1's place.
+	for {
+		pc, err := net.ListenPacket("udp", s1pc.LocalAddr().String())
+		if err == nil {
+			pc.Close()
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	// Maybe bump up the unacked sends a bit.
+	s2c.Write([]byte("ping"))
+	s2c.Write([]byte("pong"))
+	s2c.Close()
+	s2.Close()
+	// s2 should be destroyed when the write timeout on s2c occurs.
+	<-s2.destroyed.LockedChan(&mu)
+}
