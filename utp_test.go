@@ -607,3 +607,35 @@ func TestSocketDestroyedConnsClosedTimeout(t *testing.T) {
 	// s2 should be destroyed when the write timeout on s2c occurs.
 	<-s2.destroyed.LockedChan(&mu)
 }
+
+// Make sure that creating two connecting sockets repeatedly will successfully
+// close the sockets after calling CloseNow(). New sockets can be created with
+// the same address without a "bind: address already in use" error.
+func TestCloseNow(t *testing.T) {
+	s1Addr := "localhost:0"
+	s2Addr := "localhost:0"
+	for i := 0; i < 100; i++ {
+		s1, err := NewSocket("udp", s1Addr)
+		assert.NoError(t, err)
+		s2, err := NewSocket("udp", s2Addr)
+		assert.NoError(t, err)
+		s1Addr = s1.Addr().String()
+		s2Addr = s2.Addr().String()
+		go func() {
+			c, err := s1.Dial(s2.Addr().String())
+			assert.NoError(t, err)
+			_, err = c.Write([]byte("ping"))
+			assert.NoError(t, err)
+			_, err = c.Read(nil)
+			assert.Equal(t, err.Error(), "EOF")
+		}()
+		c, _ := s2.Accept()
+		buf := make([]byte, 4)
+		_, err = c.Read(buf)
+		assert.NoError(t, err)
+		s1.CloseNow()
+		s2.CloseNow()
+		_, err = c.Read(nil)
+		assert.Equal(t, err.Error(), "EOF")
+	}
+}
