@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"net"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/anacrolix/missinggo"
@@ -37,6 +38,8 @@ type Socket struct {
 
 	closed    missinggo.Event
 	destroyed missinggo.Event
+
+	wgReadWrite sync.WaitGroup
 
 	unusedReads chan read
 	connDeadlines
@@ -71,10 +74,10 @@ func NewSocket(network, addr string) (s *Socket, err error) {
 // net.PacketConn's Close method, or use NetSocketFromPacketConnNoClose.
 func NewSocketFromPacketConn(pc net.PacketConn) (s *Socket, err error) {
 	s = &Socket{
-		backlog: make(map[syn]struct{}, backlog),
-		pc:      pc,
-
+		backlog:     make(map[syn]struct{}, backlog),
+		pc:          pc,
 		unusedReads: make(chan read, 100),
+		wgReadWrite: sync.WaitGroup{},
 	}
 	mu.Lock()
 	sockets[s] = struct{}{}
@@ -141,7 +144,9 @@ func (s *Socket) reader() {
 	var b [maxRecvSize]byte
 	for {
 		mu.Unlock()
+		s.wgReadWrite.Add(1)
 		n, addr, err := s.pc.ReadFrom(b[:])
+		s.wgReadWrite.Done()
 		mu.Lock()
 		if s.destroyed.IsSet() {
 			return
@@ -474,6 +479,18 @@ func (s *Socket) Addr() net.Addr {
 	return s.pc.LocalAddr()
 }
 
+func (s *Socket) CloseNow() error {
+	mu.Lock()
+	defer mu.Unlock()
+	s.closed.Set()
+	for _, c := range s.conns {
+		c.closeNow()
+	}
+	s.destroy()
+	s.wgReadWrite.Wait()
+	return nil
+}
+
 func (s *Socket) Close() error {
 	mu.Lock()
 	defer mu.Unlock()
@@ -530,5 +547,7 @@ func (s *Socket) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	if err != nil {
 		return
 	}
+	s.wgReadWrite.Add(1)
+	defer s.wgReadWrite.Done()
 	return s.pc.WriteTo(b, addr)
 }

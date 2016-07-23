@@ -510,6 +510,13 @@ func (c *Conn) destroy(reason error) {
 	c.detach()
 }
 
+func (c *Conn) closeNow() (err error) {
+	c.closed.Set()
+	c.writeFin()
+	c.destroy(errors.New("destroyed"))
+	return
+}
+
 func (c *Conn) Close() (err error) {
 	mu.Lock()
 	defer mu.Unlock()
