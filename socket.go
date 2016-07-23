@@ -143,8 +143,8 @@ func (s *Socket) reader() {
 	defer s.destroy()
 	var b [maxRecvSize]byte
 	for {
-		mu.Unlock()
 		s.wgReadWrite.Add(1)
+		mu.Unlock()
 		n, addr, err := s.pc.ReadFrom(b[:])
 		s.wgReadWrite.Done()
 		mu.Lock()
@@ -543,11 +543,11 @@ func (s *Socket) WriteTo(b []byte, addr net.Addr) (n int, err error) {
 	if s.connDeadlines.write.passed.IsSet() {
 		err = errTimeout
 	}
+	s.wgReadWrite.Add(1)
+	defer s.wgReadWrite.Done()
 	mu.Unlock()
 	if err != nil {
 		return
 	}
-	s.wgReadWrite.Add(1)
-	defer s.wgReadWrite.Done()
 	return s.pc.WriteTo(b, addr)
 }
