@@ -33,7 +33,6 @@ type Conn struct {
 	// When the conn was allocated.
 	created time.Time
 
-	sentSyn   bool // Syn is sent by the initiator. Acceptor also tracks it.
 	synAcked  bool // Syn is acked by the acceptor. Initiator also tracks it.
 	gotFin    missinggo.Event
 	wroteFin  missinggo.Event
@@ -175,9 +174,6 @@ func (c *Conn) pendSendState() {
 }
 
 func (me *Conn) writeSyn() {
-	if me.sentSyn {
-		panic("already sent syn")
-	}
 	me.write(stSyn, me.recv_id, nil, me.seq_nr)
 	return
 }

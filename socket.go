@@ -351,10 +351,6 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 	}
 	c.seq_nr = 1
 	c.writeSyn()
-	c.sentSyn = true
-	if logLevel >= 2 {
-		log.Printf("sent syn")
-	}
 	mu.Unlock()
 
 	connErr := make(chan error, 1)
@@ -446,7 +442,6 @@ func (s *Socket) ackSyn(syn syn) (c *Conn, ok bool) {
 	c.seq_nr = uint16(rand.Int())
 	c.lastAck = c.seq_nr - 1
 	c.ack_nr = syn.seq_nr
-	c.sentSyn = true
 	c.synAcked = true
 	c.updateCanWrite()
 	if !s.registerConn(c.recv_id, resolvedAddrStr(syn.addr), c) {
