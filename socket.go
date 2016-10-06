@@ -345,14 +345,21 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 		}
 		log.Printf("that's %d connections", len(s.conns))
 	}
-	mu.Unlock()
 	if err != nil {
+		mu.Unlock()
 		return
 	}
+	c.seq_nr = 1
+	c.writeSyn()
+	c.sentSyn = true
+	if logLevel >= 2 {
+		log.Printf("sent syn")
+	}
+	mu.Unlock()
 
 	connErr := make(chan error, 1)
 	go func() {
-		connErr <- c.connect()
+		connErr <- c.recvSynAck()
 	}()
 	var timeoutCh <-chan time.Time
 	if timeout != 0 {
