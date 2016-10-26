@@ -3,6 +3,7 @@ package utp
 import (
 	"bytes"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"log"
@@ -637,5 +638,61 @@ func TestCloseNow(t *testing.T) {
 		s2.CloseNow()
 		_, err = c.Read(nil)
 		assert.Equal(t, err.Error(), "EOF")
+	}
+}
+
+// Test dial 0.0.0.0
+func Test0000ipv4(t *testing.T) {
+	testSimpleRead(t, "0.0.0.0", "0.0.0.0")
+}
+
+// Test dial [::]
+func Test0000ipv6(t *testing.T) {
+	testSimpleRead(t, "[::]", "[::]")
+}
+
+// tests a simple server accept/write/close with client dial/read.
+func testSimpleRead(t *testing.T, serverBindIP string, clientDialIP string) {
+	l, err := NewSocket("udp", fmt.Sprintf("%s:0", serverBindIP))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sport := l.pc.(*net.UDPConn).LocalAddr().(*net.UDPAddr).Port
+
+	defer func() {
+		err = l.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}()
+
+	serr := make(chan error, 1)
+	go func() {
+		con, err := l.Accept()
+		if err != nil {
+			serr <- err
+			return
+		}
+		io.WriteString(con, "hello")
+		serr <- con.Close()
+	}()
+
+	client, err := Dial(fmt.Sprintf("%s:%d", clientDialIP, sport))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	response, err := ioutil.ReadAll(client)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if string(response) != "hello" {
+		t.Fatalf("unexpected response %s", response)
+	}
+
+	err = client.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
