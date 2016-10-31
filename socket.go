@@ -349,11 +349,11 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 	c.recv_id = s.newConnID(resolvedAddrStr(c.RemoteAddr().String()))
 	c.send_id = c.recv_id + 1
 	if logLevel >= 1 {
-		log.Printf("dial registering addr: %s", netAddr.String())
+		log.Printf("dial registering addr: %s", c.RemoteAddr().String())
 	}
 	if !s.registerConn(c.recv_id, resolvedAddrStr(c.RemoteAddr().String()), c) {
 		err = errors.New("couldn't register new connection")
-		log.Println(c.recv_id, netAddr.String())
+		log.Println(c.recv_id, c.RemoteAddr().String())
 		for k, c := range s.conns {
 			log.Println(k, c, c.age())
 		}
