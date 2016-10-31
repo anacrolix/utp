@@ -296,6 +296,20 @@ func (s *Socket) newConnID(remoteAddr resolvedAddrStr) (id uint16) {
 }
 
 func (s *Socket) newConn(addr net.Addr) (c *Conn) {
+	udpAddr, ok := addr.(*net.UDPAddr)
+	if ok {
+		// find the real address that will be used.
+		l, err := net.DialUDP("udp", nil, udpAddr)
+		if err != nil {
+			panic(err)
+		}
+		if logLevel >= 1 {
+			log.Printf("updating addr from %v to %v\n", addr, l.RemoteAddr())
+		}
+		addr = l.RemoteAddr()
+		l.Close()
+	}
+
 	c = &Conn{
 		socket:           s,
 		remoteSocketAddr: addr,
@@ -332,14 +346,14 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 
 	mu.Lock()
 	c := s.newConn(netAddr)
-	c.recv_id = s.newConnID(resolvedAddrStr(netAddr.String()))
+	c.recv_id = s.newConnID(resolvedAddrStr(c.RemoteAddr().String()))
 	c.send_id = c.recv_id + 1
 	if logLevel >= 1 {
-		log.Printf("dial registering addr: %s", netAddr.String())
+		log.Printf("dial registering addr: %s", c.RemoteAddr().String())
 	}
-	if !s.registerConn(c.recv_id, resolvedAddrStr(netAddr.String()), c) {
+	if !s.registerConn(c.recv_id, resolvedAddrStr(c.RemoteAddr().String()), c) {
 		err = errors.New("couldn't register new connection")
-		log.Println(c.recv_id, netAddr.String())
+		log.Println(c.recv_id, c.RemoteAddr().String())
 		for k, c := range s.conns {
 			log.Println(k, c, c.age())
 		}
