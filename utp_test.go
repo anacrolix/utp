@@ -95,6 +95,15 @@ func TestDialTimeout(t *testing.T) {
 	t.Log(err)
 }
 
+func TestListen(t *testing.T) {
+	defer goroutineLeakCheck(t)()
+	ln, err := NewSocket("udp", "localhost:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln.Close()
+}
+
 func TestMinMaxHeaderType(t *testing.T) {
 	require.Equal(t, stSyn, stMax)
 }

@@ -179,6 +179,11 @@ func DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
 	return s.DialTimeout(addr, timeout)
 }
 
+// Listen creates listener Socket to accept incoming connections.
+func Listen(laddr string) (net.Listener, error) {
+	return NewSocket("udp", laddr)
+}
+
 func nowTimestamp() uint32 {
 	return uint32(time.Now().UnixNano() / int64(time.Microsecond))
 }
