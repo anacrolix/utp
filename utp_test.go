@@ -19,6 +19,7 @@ import (
 	"github.com/bradfitz/iter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/net/nettest"
 )
 
 func init() {
@@ -712,4 +713,32 @@ func testSimpleRead(t *testing.T, serverBindIP string, clientDialIP string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestNettestInprocSocket(t *testing.T) {
+	nettest.TestConn(t, func() (c1, c2 net.Conn, stop func(), err error) {
+		s, err := NewSocket("inproc", ":0")
+		if err != nil {
+			return
+		}
+		c1, c2 = connPairSocket(s)
+		stop = func() {
+			s.CloseNow()
+		}
+		return
+	})
+}
+
+func TestNettestLocalhostUDP(t *testing.T) {
+	nettest.TestConn(t, func() (c1, c2 net.Conn, stop func(), err error) {
+		s, err := NewSocket("udp", "localhost:0")
+		if err != nil {
+			return
+		}
+		c1, c2 = connPairSocket(s)
+		stop = func() {
+			s.CloseNow()
+		}
+		return
+	})
 }
