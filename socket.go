@@ -173,6 +173,7 @@ func receivedUTPPacketSize(n int) {
 	}
 }
 
+// Process a received packet.
 func (s *Socket) dispatch(read read) {
 	b := read.data
 	addr := read.from
