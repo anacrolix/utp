@@ -30,7 +30,7 @@ const (
 	backlog = 50
 
 	// IPv6 min MTU is 1280, -40 for IPv6 header, and ~8 for fragment header?
-	minMTU = 1438
+	minMTU = 1438 // Why?
 	// uTP header of 20, +2 for the next extension, and an optional selective
 	// ACK.
 	maxHeaderSize  = 20 + 2 + (((maxUnackedInbound+7)/8)+3)/4*4
