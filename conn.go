@@ -262,7 +262,9 @@ func (c *Conn) ack(nr uint16) {
 	}
 	i := nr - c.lastAck - 1
 	if int(i) >= len(c.unackedSends) {
-		log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
+		// Remote has acknowledged receipt of packets we haven't even sent.
+		acksReceivedAheadOfSyn.Add(1)
+		// log.Printf("got ack ahead of syn (%x > %x)", nr, c.seq_nr-1)
 		return
 	}
 	s := c.unackedSends[i]
