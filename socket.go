@@ -230,10 +230,10 @@ func (s *Socket) dispatch(read read) {
 		s.pushBacklog(syn)
 		return
 	} else if h.Type != stReset {
-		// This is an unexpected packet. We'll send a reset, but also pass
-		// it on.
-		// log.Print("resetting unexpected packet")
-		// I don't think you can reset on the received packets ConnID if it isn't a SYN, as the send_id will differ in this case.
+		unexpectedPacketsRead.Add(1)
+		// This is an unexpected packet. We'll send a reset, but also pass it
+		// on. I don't think you can reset on the received packets ConnID if
+		// it isn't a SYN, as the send_id will differ in this case.
 		s.reset(addr, h.SeqNr, h.ConnID)
 		s.reset(addr, h.SeqNr, h.ConnID-1)
 		s.reset(addr, h.SeqNr, h.ConnID+1)
