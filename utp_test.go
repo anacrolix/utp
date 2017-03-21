@@ -10,12 +10,12 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
 
 	_ "github.com/anacrolix/envpprof"
+	"github.com/anacrolix/missinggo"
 	"github.com/bradfitz/iter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +33,7 @@ func setDefaultTestingDurations() {
 }
 
 func TestUTPPingPong(t *testing.T) {
-	defer goroutineLeakCheck(t)()
+	defer missinggo.GoroutineLeakCheck(t)()
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	defer s.Close()
@@ -63,29 +63,8 @@ func TestUTPPingPong(t *testing.T) {
 	<-pingerClosed
 }
 
-func goroutineLeakCheck(t testing.TB) func() {
-	if !testing.Verbose() {
-		return func() {}
-	}
-	numStart := runtime.NumGoroutine()
-	return func() {
-		var numNow int
-		for range iter.N(1) {
-			numNow = runtime.NumGoroutine()
-			if numNow == numStart {
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-		// I'd print stacks, or treat this as fatal, but I think
-		// runtime.NumGoroutine is including system routines for which we are
-		// not provided the stacks, and are spawned unpredictably.
-		t.Logf("have %d goroutines, started with %d", numNow, numStart)
-	}
-}
-
 func TestDialTimeout(t *testing.T) {
-	defer goroutineLeakCheck(t)()
+	defer missinggo.GoroutineLeakCheck(t)()
 	s, _ := NewSocket("udp", "localhost:0")
 	defer s.Close()
 	conn, err := DialTimeout(s.Addr().String(), 10*time.Millisecond)
@@ -97,7 +76,7 @@ func TestDialTimeout(t *testing.T) {
 }
 
 func TestListen(t *testing.T) {
-	defer goroutineLeakCheck(t)()
+	defer missinggo.GoroutineLeakCheck(t)()
 	ln, err := NewSocket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +138,7 @@ func TestConnReadDeadline(t *testing.T) {
 }
 
 func connectSelfLots(n int, t testing.TB) {
-	defer goroutineLeakCheck(t)()
+	defer missinggo.GoroutineLeakCheck(t)()
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	go func() {
