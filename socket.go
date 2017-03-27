@@ -6,7 +6,6 @@ import (
 	"log"
 	"math/rand"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -152,12 +151,9 @@ func (s *Socket) reader() {
 			return
 		}
 		if err != nil {
-			if strings.Contains(err.Error(), "use of closed network connection") || err == io.EOF {
-				s.ReadErr = err
-				return
-			}
 			log.Printf("error reading Socket PacketConn: %s", err)
-			continue
+			s.ReadErr = err
+			return
 		}
 		s.dispatch(read{
 			append([]byte(nil), b[:n]...),
