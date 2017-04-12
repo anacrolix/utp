@@ -200,7 +200,6 @@ func (s *Socket) handlePacketReceivedForEstablishedConn(h header, from net.Addr,
 			panic("bad assumption")
 		}
 	}
-	// receivedUTPPacketSize(len(data))
 	c.receivePacket(h, data)
 }
 
@@ -216,6 +215,7 @@ func (s *Socket) handleReceivedPacket(p read) {
 		return
 	}
 	if c, ok := s.connForRead(h, p.from); ok {
+		receivedUTPPacketSize(len(p.data))
 		s.handlePacketReceivedForEstablishedConn(h, p.from, p.data[hEnd:], c)
 		return
 	}
