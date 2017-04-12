@@ -155,7 +155,7 @@ func (s *Socket) reader() {
 			s.ReadErr = err
 			return
 		}
-		s.dispatch(read{
+		s.handleReceivedPacket(read{
 			append([]byte(nil), b[:n]...),
 			addr,
 		})
@@ -169,72 +169,81 @@ func receivedUTPPacketSize(n int) {
 	}
 }
 
-// Process a received packet.
-func (s *Socket) dispatch(read read) {
-	b := read.data
-	addr := read.from
-	if len(b) < 20 {
-		s.unusedRead(read)
+func (s *Socket) connForRead(h header, from net.Addr) (c *Conn, ok bool) {
+	c, ok = s.conns[connKey{
+		resolvedAddrStr(from.String()),
+		func() uint16 {
+			if h.Type == stSyn {
+				// SYNs have a ConnID one lower than the eventual recvID, and we index
+				// the connections with that, so use it for the lookup.
+				return h.ConnID + 1
+			} else {
+				return h.ConnID
+			}
+		}(),
+	}]
+	return
+}
+
+func (s *Socket) handlePacketReceivedForEstablishedConn(h header, from net.Addr, data []byte, c *Conn) {
+	if h.Type == stSyn {
+		if h.ConnID == c.send_id-2 {
+			// This is a SYN for connection that cannot exist locally. The
+			// connection the remote wants to establish here with the proposed
+			// recv_id, already has an existing connection that was dialled
+			// *out* from this socket, which is why the send_id is 1 higher,
+			// rather than 1 lower than the recv_id.
+			log.Print("resetting conflicting syn")
+			s.reset(from, h.SeqNr, h.ConnID)
+			return
+		} else if h.ConnID != c.send_id {
+			panic("bad assumption")
+		}
+	}
+	// receivedUTPPacketSize(len(data))
+	c.receivePacket(h, data)
+}
+
+func (s *Socket) handleReceivedPacket(p read) {
+	if len(p.data) < 20 {
+		s.unusedRead(p)
 		return
 	}
 	var h header
-	hEnd, err := h.Unmarshal(b)
-	if logLevel >= 1 {
-		log.Printf("recvd utp msg: %s", packetDebugString(&h, b[hEnd:]))
-	}
+	hEnd, err := h.Unmarshal(p.data)
 	if err != nil || h.Type > stMax || h.Version != 1 {
-		s.unusedRead(read)
+		s.unusedRead(p)
 		return
 	}
-	c, ok := s.conns[connKey{resolvedAddrStr(addr.String()), func() (recvID uint16) {
-		recvID = h.ConnID
-		// If a SYN is resent, its connection ID field will be one lower
-		// than we expect.
-		if h.Type == stSyn {
-			recvID++
-		}
-		return
-	}()}]
-	if ok {
-		if h.Type == stSyn {
-			if h.ConnID == c.send_id-2 {
-				// This is a SYN for connection that cannot exist locally. The
-				// connection the remote wants to establish here with the proposed
-				// recv_id, already has an existing connection that was dialled
-				// *out* from this socket, which is why the send_id is 1 higher,
-				// rather than 1 lower than the recv_id.
-				log.Print("resetting conflicting syn")
-				s.reset(addr, h.SeqNr, h.ConnID)
-				return
-			} else if h.ConnID != c.send_id {
-				panic("bad assumption")
-			}
-		}
-		receivedUTPPacketSize(len(b))
-		c.receivePacket(h, b[hEnd:])
+	if c, ok := s.connForRead(h, p.from); ok {
+		s.handlePacketReceivedForEstablishedConn(h, p.from, p.data[hEnd:], c)
 		return
 	}
-	if h.Type == stSyn {
-		if logLevel >= 1 {
-			log.Printf("adding SYN to backlog")
-		}
-		syn := syn{
+	// Packet doesn't belong to an existing connection.
+	switch h.Type {
+	case stSyn:
+		s.pushBacklog(syn{
 			seq_nr:  h.SeqNr,
 			conn_id: h.ConnID,
-			addr:    addr.String(),
-		}
-		s.pushBacklog(syn)
+			addr:    p.from.String(),
+		})
 		return
-	} else if h.Type != stReset {
+	case stReset:
+		// Could be a late arriving packet for a Conn we're already done with.
+		// If it was for an existing connection, we would have handled it
+		// earlier.
+	default:
 		unexpectedPacketsRead.Add(1)
 		// This is an unexpected packet. We'll send a reset, but also pass it
 		// on. I don't think you can reset on the received packets ConnID if
 		// it isn't a SYN, as the send_id will differ in this case.
-		s.reset(addr, h.SeqNr, h.ConnID)
-		s.reset(addr, h.SeqNr, h.ConnID-1)
-		s.reset(addr, h.SeqNr, h.ConnID+1)
+		s.reset(p.from, h.SeqNr, h.ConnID)
+		// Connection initiated by remote.
+		s.reset(p.from, h.SeqNr, h.ConnID-1)
+		// Connection initiated locally.
+		s.reset(p.from, h.SeqNr, h.ConnID+1)
 	}
-	s.unusedRead(read)
+	s.unusedRead(p)
 }
 
 // Send a reset in response to a packet with the given header.
