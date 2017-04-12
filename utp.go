@@ -107,10 +107,9 @@ func init() {
 }
 
 var (
-	errClosed                   = errors.New("closed")
-	errNotImplemented           = errors.New("not implemented")
-	errTimeout        net.Error = timeoutError{"i/o timeout"}
-	errAckTimeout               = timeoutError{"timed out waiting for ack"}
+	errClosed               = errors.New("closed")
+	errTimeout    net.Error = timeoutError{"i/o timeout"}
+	errAckTimeout           = timeoutError{"timed out waiting for ack"}
 )
 
 type timeoutError struct {
@@ -157,10 +156,6 @@ type recv struct {
 	Type st
 }
 
-func packetDebugString(h *header, payload []byte) string {
-	return fmt.Sprintf("%s->%d: %q", h.Type, h.ConnID, payload)
-}
-
 // Attempt to connect to a remote uTP listener, creating a Socket just for
 // this connection.
 func Dial(addr string) (net.Conn, error) {
@@ -194,9 +189,4 @@ func seqLess(a, b uint16) bool {
 	} else {
 		return a < b && a >= b-0x8000
 	}
-}
-
-type packet struct {
-	h       header
-	payload []byte
 }

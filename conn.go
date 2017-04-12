@@ -36,7 +36,6 @@ type Conn struct {
 	synAcked  bool // Syn is acked by the acceptor. Initiator also tracks it.
 	gotFin    missinggo.Event
 	wroteFin  missinggo.Event
-	finAcked  bool
 	err       error
 	closed    missinggo.Event
 	destroyed missinggo.Event
@@ -226,15 +225,6 @@ func (c *Conn) latency() (ret time.Duration) {
 		ret += l
 	}
 	ret = (ret + time.Duration(len(c.latencies)) - 1) / time.Duration(len(c.latencies))
-	return
-}
-
-func (c *Conn) numUnackedSends() (num int) {
-	for _, s := range c.unackedSends {
-		if !s.acked.IsSet() {
-			num++
-		}
-	}
 	return
 }
 
