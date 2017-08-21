@@ -1,6 +1,7 @@
 package utp
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -345,6 +346,12 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 
 func (s *Socket) Dial(addr string) (net.Conn, error) {
 	return s.DialTimeout(addr, 0)
+}
+
+// DialContext acts similarly to Dial but takes in a context as well
+func (s *Socket) DialContext(ctx context.Context, addr string) (net.Conn, error) {
+	// NOTE(or): The context is currently discarded
+	return DialTimeout(addr, 0)
 }
 
 func (s *Socket) resolveAddr(addr string) (net.Addr, error) {
