@@ -15,7 +15,7 @@ import (
 	"time"
 
 	_ "github.com/anacrolix/envpprof"
-	"github.com/anacrolix/missinggo"
+	"github.com/anacrolix/missinggo/leaktest"
 	"github.com/bradfitz/iter"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,7 +33,7 @@ func setDefaultTestingDurations() {
 }
 
 func TestUTPPingPong(t *testing.T) {
-	defer missinggo.GoroutineLeakCheck(t)()
+	defer leaktest.GoroutineLeakCheck(t)()
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	defer s.Close()
@@ -64,7 +64,7 @@ func TestUTPPingPong(t *testing.T) {
 }
 
 func TestDialTimeout(t *testing.T) {
-	defer missinggo.GoroutineLeakCheck(t)()
+	defer leaktest.GoroutineLeakCheck(t)()
 	s, _ := NewSocket("udp", "localhost:0")
 	defer s.Close()
 	conn, err := DialTimeout(s.Addr().String(), 10*time.Millisecond)
@@ -76,7 +76,7 @@ func TestDialTimeout(t *testing.T) {
 }
 
 func TestListen(t *testing.T) {
-	defer missinggo.GoroutineLeakCheck(t)()
+	defer leaktest.GoroutineLeakCheck(t)()
 	ln, err := NewSocket("udp", "localhost:0")
 	if err != nil {
 		t.Fatal(err)
@@ -138,7 +138,7 @@ func TestConnReadDeadline(t *testing.T) {
 }
 
 func connectSelfLots(n int, t testing.TB) {
-	defer missinggo.GoroutineLeakCheck(t)()
+	defer leaktest.GoroutineLeakCheck(t)()
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	go func() {
