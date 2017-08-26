@@ -1,6 +1,7 @@
 package utp
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -157,7 +158,9 @@ func TestAcceptGone(t *testing.T) {
 	s, err := NewSocket("udp", "localhost:0")
 	require.NoError(t, err)
 	defer s.Close()
-	_, err = DialTimeout(s.Addr().String(), time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+	defer cancel()
+	_, err = DialContext(ctx, s.Addr().String())
 	require.Error(t, err)
 	// Will succeed because we don't signal that we give up dialing, or check
 	// that the handshake is completed before returning the new Conn.

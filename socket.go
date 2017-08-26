@@ -1,6 +1,7 @@
 package utp
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log"
@@ -344,7 +345,7 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 }
 
 func (s *Socket) Dial(addr string) (net.Conn, error) {
-	return s.DialTimeout(addr, 0)
+	return s.DialContext(context.Background(), addr)
 }
 
 func (s *Socket) resolveAddr(addr string) (net.Addr, error) {
@@ -386,7 +387,7 @@ func (s *Socket) startOutboundConn(addr net.Addr) (c *Conn, err error) {
 
 // A zero timeout is no timeout. This will fallback onto the write ack
 // timeout.
-func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, err error) {
+func (s *Socket) DialContext(ctx context.Context, addr string) (nc net.Conn, err error) {
 	netAddr, err := s.resolveAddr(addr)
 	if err != nil {
 		return
@@ -402,8 +403,8 @@ func (s *Socket) DialTimeout(addr string, timeout time.Duration) (nc net.Conn, e
 		connErr <- c.recvSynAck()
 	}()
 	var timeoutCh <-chan time.Time
-	if timeout != 0 {
-		timeoutCh = time.After(timeout)
+	if dl, ok := ctx.Deadline(); ok {
+		timeoutCh = time.After(time.Until(dl))
 	}
 	select {
 	case err = <-connErr:

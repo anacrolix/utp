@@ -2,6 +2,7 @@ package utp
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"fmt"
 	"io"
@@ -67,7 +68,9 @@ func TestDialTimeout(t *testing.T) {
 	defer leaktest.GoroutineLeakCheck(t)()
 	s, _ := NewSocket("udp", "localhost:0")
 	defer s.Close()
-	conn, err := DialTimeout(s.Addr().String(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	conn, err := DialContext(ctx, s.Addr().String())
 	if err == nil {
 		conn.Close()
 		t.Fatal("expected timeout")
