@@ -345,11 +345,14 @@ func (s *Socket) newConn(addr net.Addr) (c *Conn) {
 }
 
 func (s *Socket) Dial(addr string) (net.Conn, error) {
-	return s.DialContext(context.Background(), addr)
+	return s.DialContext(context.Background(), "", addr)
 }
 
-func (s *Socket) resolveAddr(addr string) (net.Addr, error) {
+func (s *Socket) resolveAddr(network, addr string) (net.Addr, error) {
 	n := s.network()
+	if network != "" {
+		n = network
+	}
 	if n == "inproc" {
 		return inproc.ResolveAddr(n, addr)
 	}
@@ -387,8 +390,8 @@ func (s *Socket) startOutboundConn(addr net.Addr) (c *Conn, err error) {
 
 // A zero timeout is no timeout. This will fallback onto the write ack
 // timeout.
-func (s *Socket) DialContext(ctx context.Context, addr string) (nc net.Conn, err error) {
-	netAddr, err := s.resolveAddr(addr)
+func (s *Socket) DialContext(ctx context.Context, network, addr string) (nc net.Conn, err error) {
+	netAddr, err := s.resolveAddr(network, addr)
 	if err != nil {
 		return
 	}
