@@ -405,14 +405,10 @@ func (s *Socket) DialContext(ctx context.Context, network, addr string) (nc net.
 	go func() {
 		connErr <- c.recvSynAck()
 	}()
-	var timeoutCh <-chan time.Time
-	if dl, ok := ctx.Deadline(); ok {
-		timeoutCh = time.After(time.Until(dl))
-	}
 	select {
 	case err = <-connErr:
-	case <-timeoutCh:
-		err = errTimeout
+	case <-ctx.Done():
+		err = ctx.Err()
 	}
 	if err != nil {
 		mu.Lock()
