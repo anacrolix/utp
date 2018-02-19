@@ -388,8 +388,6 @@ func (s *Socket) startOutboundConn(addr net.Addr) (c *Conn, err error) {
 	return
 }
 
-// A zero timeout is no timeout. This will fallback onto the write ack
-// timeout.
 func (s *Socket) DialContext(ctx context.Context, network, addr string) (nc net.Conn, err error) {
 	netAddr, err := s.resolveAddr(network, addr)
 	if err != nil {
